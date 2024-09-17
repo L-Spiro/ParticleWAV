@@ -1,0 +1,98 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Header Files\OS">
+      <UniqueIdentifier>{3a3603a2-12d1-443c-8291-36562a4ce0a6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\OS">
+      <UniqueIdentifier>{f6c54621-18d4-494f-bf55-e7203398abbd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Files">
+      <UniqueIdentifier>{069a1b42-c29d-4347-bce8-8fba15aed2cd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Files">
+      <UniqueIdentifier>{2a0bfd18-00ed-44af-b49d-5acbaadf0f41}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Utilities">
+      <UniqueIdentifier>{a042bbca-2c28-4221-b4c0-d1ed39f99fe0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Utilities">
+      <UniqueIdentifier>{01bc05ee-4ab4-489e-925d-51d2bbc1376b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Wav">
+      <UniqueIdentifier>{ca5fc7e5-b140-47a0-86b7-81c8c6ebf89d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Wav">
+      <UniqueIdentifier>{2050e161-d56c-4730-8f80-17bfada06c87}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Src\PWParticleWav.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\OS\PWFeatureSet.cpp">
+      <Filter>Source Files\OS</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\Files\PWFileBase.cpp">
+      <Filter>Source Files\Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\Files\PWStdFile.cpp">
+      <Filter>Source Files\Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\Utilities\PWUtilities.cpp">
+      <Filter>Source Files\Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="Src\Wav\PWWavFile.cpp">
+      <Filter>Source Files\Wav</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="Src\OS\PWSinCos.asm">
+      <Filter>Source Files\OS</Filter>
+    </MASM>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Src\OS\PWApple.h">
+      <Filter>Header Files\OS</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\OS\PWFeatureSet.h">
+      <Filter>Header Files\OS</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\OS\PWOs.h">
+      <Filter>Header Files\OS</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\OS\PWWindows.h">
+      <Filter>Header Files\OS</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Files\PWFileBase.h">
+      <Filter>Header Files\Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Files\PWStdFile.h">
+      <Filter>Header Files\Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Utilities\PWUtilities.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\PWParticleWav.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Wav\PWWavFile.h">
+      <Filter>Header Files\Wav</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Utilities\PWAlignmentAllocator.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
