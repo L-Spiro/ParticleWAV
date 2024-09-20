@@ -39,11 +39,7 @@ namespace pw {
 	 */
 	bool CWavFile::Open( const char8_t * _pcPath ) {
 		std::vector<uint8_t> vFile;
-		{
-			CStdFile sfFile;
-			if ( !sfFile.Open( _pcPath ) ) { return false; }
-			if ( !sfFile.LoadToMemory( vFile ) ) { return false; }
-		}
+		if ( !CStdFile::LoadToMemory( _pcPath, vFile ) ) { return false; }
 		return LoadFromMemory( vFile );
 		//return Open( std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.from_bytes( _pcPath ).c_str() );
 	}
@@ -56,11 +52,7 @@ namespace pw {
 	 */
 	bool CWavFile::Open( const char16_t * _pwcPath ) {
 		std::vector<uint8_t> vFile;
-		{
-			CStdFile sfFile;
-			if ( !sfFile.Open( _pwcPath ) ) { return false; }
-			if ( !sfFile.LoadToMemory( vFile ) ) { return false; }
-		}
+		if ( !CStdFile::LoadToMemory( _pwcPath, vFile ) ) { return false; }
 		return LoadFromMemory( vFile );
 	}
 
@@ -79,8 +71,8 @@ namespace pw {
 #define PW_PTR_SIZE( TYPE, OFFSET, SIZE )			((OFFSET) + SIZE) > _vData.size() ? nullptr : reinterpret_cast<const TYPE *>(&_vData[OFFSET])
 #define PW_PTR( TYPE, OFFSET )						PW_PTR_SIZE( TYPE, OFFSET, sizeof( TYPE ) )
 #define PW_READ_32( VAL )							pui32Scratch = PW_PTR( uint32_t, stOffset ); if ( !pui32Scratch ) { return false; } stOffset += sizeof( uint32_t ); VAL = (*pui32Scratch)
-//#define PW_READ_16( VAL )						pui16Scratch = PW_PTR( uint16_t, stOffset ); if ( !pui16Scratch ) { return false; } stOffset += sizeof( uint16_t ); VAL = (*pui16Scratch)
-#define PW_READ_STRUCT( TYPE, VAL )				VAL = PW_PTR( TYPE, stOffset ); if ( !VAL ) { return false; } stOffset += sizeof( TYPE )
+//#define PW_READ_16( VAL )							pui16Scratch = PW_PTR( uint16_t, stOffset ); if ( !pui16Scratch ) { return false; } stOffset += sizeof( uint16_t ); VAL = (*pui16Scratch)
+#define PW_READ_STRUCT( TYPE, VAL )					VAL = PW_PTR( TYPE, stOffset ); if ( !VAL ) { return false; } stOffset += sizeof( TYPE )
 
 
 		do {
@@ -978,6 +970,16 @@ namespace pw {
 
 						stIdx += sizeof( __m512d ) / sizeof( double );
 					}
+
+					while ( stIdx < stNumSamples ) {
+						vSamples[C][stIdx++] = static_cast<int16_t>(std::round( std::clamp( _vSrc[C][stIdx], -1.0, 1.0 ) * dFactor ));
+					}
+				}
+
+				for ( size_t I = 0; I < _vSrc[0].size(); ++I ) {
+					for ( size_t J = 0; J < _vSrc.size(); ++J ) {
+						(*pi16Dst++) = vSamples[J][I];
+					}
 				}
 
 				return true;
@@ -1002,16 +1004,28 @@ namespace pw {
 	 * \return Returns trye if all samples were added to the buffer.
 	 */
 	bool CWavFile::BatchF64ToPcm24( const lwaudio &_vSrc, std::vector<uint8_t> &_vDst ) {
-		const double dFactor = std::pow( 2.0, 24.0 - 1.0 ) - 1.0;
-		for ( size_t I = 0; I < _vSrc[0].size(); ++I ) {
-			for ( size_t J = 0; J < _vSrc.size(); ++J ) {
-				int32_t iSample = static_cast<int32_t>(std::round( std::clamp( _vSrc[J][I], -1.0, 1.0 ) * dFactor ));
-				_vDst.push_back( static_cast<uint8_t>(iSample) );
-				_vDst.push_back( static_cast<uint8_t>(iSample >> 8) );
-				_vDst.push_back( static_cast<uint8_t>(iSample >> 16) );
+		try {
+			const double dFactor = std::pow( 2.0, 24.0 - 1.0 ) - 1.0;
+			auto stNumSamples = _vSrc[0].size();
+			auto stNumChannels = _vSrc.size();
+			auto aSize = _vDst.size();
+			_vDst.resize( _vDst.size() + stNumSamples * stNumChannels * 3 );
+			int8_t * pi8Dst = reinterpret_cast<int8_t *>(_vDst.data() + aSize);
+
+			for ( size_t I = 0; I < _vSrc[0].size(); ++I ) {
+				for ( size_t J = 0; J < _vSrc.size(); ++J ) {
+					int32_t iSample = static_cast<int32_t>(std::round( std::clamp( _vSrc[J][I], -1.0, 1.0 ) * dFactor ));
+					(*pi8Dst++) = static_cast<uint8_t>(iSample);
+					(*pi8Dst++) = static_cast<uint8_t>(iSample >> 8);
+					(*pi8Dst++) = static_cast<uint8_t>(iSample >> 16);
+					/*_vDst.push_back( static_cast<uint8_t>(iSample) );
+					_vDst.push_back( static_cast<uint8_t>(iSample >> 8) );
+					_vDst.push_back( static_cast<uint8_t>(iSample >> 16) );*/
+				}
 			}
+			return true;
 		}
-		return true;
+		catch ( ... ) { return false; }
 	}
 
 	/**

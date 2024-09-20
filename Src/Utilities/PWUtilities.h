@@ -108,6 +108,49 @@ namespace pw {
 		static std::u8string								Utf16ToUtf8( const char16_t * _pcString, bool * _pbErrored = nullptr );
 
 		/**
+		 * Converts a value to a string.
+		 * 
+		 * \param _tVal The value to convert.
+		 * \param _stDigits The number of digits to which to pad.
+		 * \return Returns the string form of the given value.
+		 **/
+		template <typename _tType>
+		static std::u16string								ToString( _tType _tVal, size_t _stDigits = 0 ) {
+			std::wstring wsNumber = std::to_wstring( _tVal );
+			std::u16string usNumber( wsNumber.begin(), wsNumber.end() );
+			while ( usNumber.size() < _stDigits ) {
+				usNumber.insert( usNumber.begin(), u'0' );
+			}
+			return usNumber;
+		}
+
+		/**
+		 * Converts a value to a string.
+		 * 
+		 * \param _pwcVal The value to convert.
+		 * \param _stDigits The number of digits to which to pad.
+		 * \return Returns the string form of the given value.
+		 **/
+		static std::u16string								ToString( const wchar_t * _pwcVal ) {
+			std::wstring wsNumber = _pwcVal;
+			std::u16string usNumber( wsNumber.begin(), wsNumber.end() );
+			return usNumber;
+		}
+
+		/**
+		 * Converts a value to a string.
+		 * 
+		 * \param _pcVal The value to convert.
+		 * \param _stDigits The number of digits to which to pad.
+		 * \return Returns the string form of the given value.
+		 **/
+		static std::u16string								ToString( const char * _pcVal ) {
+			std::string wsNumber = _pcVal;
+			std::u16string usNumber( wsNumber.begin(), wsNumber.end() );
+			return usNumber;
+		}
+
+		/**
 		 * Reads a line from a buffer.
 		 * 
 		 * \param _vBuffer The buffer from which to read a line.
@@ -481,7 +524,7 @@ namespace pw {
 			return std::sin( _dX ) / _dX;
 		}
 
-				/**
+		/**
 		 * Is AVX supported?
 		 *
 		 * \return Returns true if AVX is supported.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Wav/PWWavFile.h"
+
 #include <cstdint>
 #include <format>
 #include <iostream>
@@ -44,6 +46,12 @@ namespace pw {
         double                                                          dParm3 = 0.0;                                                   /**< Parm 3. */
         std::vector<uint8_t>                                            vParm4;                                                         /**< Parm 4. */
         std::u16string                                                  sParm5;                                                         /**< Parm 5. */
+
+        std::vector<std::u16string>::size_type                          stIdx = 0;                                                      /**< Item index. */
+        std::vector<std::u16string>::size_type                          stTotal = 0;                                                    /**< The total number of files. */
+        pw::CWavFile::lwaudio *                                         paSamples = nullptr;                                            /**< a pointer to the samples. */
+
+        const wchar_t *                                                 pcOperation = nullptr;                                          /**< The name of the operation. */
     };
 
 	/** Options. */
@@ -63,7 +71,7 @@ namespace pw {
      * \param _eError The error code to print to a string.
      * \return Returns a string representing the given error code.
      **/
-    std::u16string ErrorToString( PW_ERRORS _eError ) {
+    std::u16string                                                      ErrorToString( PW_ERRORS _eError ) {
         switch ( _eError ) {
             case PW_E_OUTOFMEMORY : {
                 return std::u16string( u"Out of memory." );
@@ -120,7 +128,7 @@ namespace pw {
 	 * \param _pcText Text to print.
 	 * \param _eError The error code to print.
 	 **/
-	void PrintError( const char16_t * _pcText, PW_ERRORS _eError ) {
+	void                                                                PrintError( const char16_t * _pcText, PW_ERRORS _eError ) {
         if ( _eError != PW_E_SUCCESS ) {
             std::u16string sError;
             if ( _pcText ) {
@@ -134,4 +142,38 @@ namespace pw {
 #endif  // #ifdef PW_WINDOWS
         }
     }
+
+    /**
+     * Fills in meta information in a string.
+     * 
+     * \param _sStr The string to modify.
+     * \param _stI The index of the file being processed.
+     * \param _stTotal The total number of files to process.
+     * \param _wfWav The WAV file being processed.
+     * \param _oOptions The options.
+     * \return Returns the converted string.
+     **/
+    std::u16string                                                      MetaString( const std::u16string &_sStr, std::vector<std::u16string>::size_type _stI, std::vector<std::u16string>::size_type _stTotal, const CWavFile &_wfWav,
+        PW_OPTIONS &_oOptions );
+
+    /**
+     * Sets the track number.
+     * 
+     * \param _wfFile The WAV file being modified.
+     * \param _mModifiers Associated modifer data.
+     * \param _oOptions Incoming options.
+     * \return Returns true.
+     **/
+    bool                                                                SetTrackNumber( class CWavFile &_wfFile, struct PW_MODIFIER &_mModifiers, struct PW_OPTIONS &_oOptions );
+
+    /**
+     * Sets a metadata string.
+     * 
+     * \param _wfFile The WAV file being modified.
+     * \param _mModifiers Associated modifer data.
+     * \param _oOptions Incoming options.
+     * \return Returns true.
+     **/
+    bool                                                                SetMeta( class CWavFile &_wfFile, struct PW_MODIFIER &_mModifiers, struct PW_OPTIONS &_oOptions );
+
 }	// namespace pw

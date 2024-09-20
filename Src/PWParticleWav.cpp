@@ -104,6 +104,26 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
                 catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
                 PW_ADV( 2 );
             }
+
+
+            if ( PW_CHECK( 1, set_track_by_idx ) ) {
+                try {
+                    pw::PW_MODIFIER mMod = { .pfModifier = &pw::SetTrackNumber, .pcOperation = L"set_track_by_idx" };
+                    oOptions.vFuncs.push_back( mMod );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( 1 );
+            }
+            if ( PW_CHECK( 3, set_meta_string ) ) {
+                try {
+                    pw::PW_MODIFIER mMod = { .pfModifier = &pw::SetMeta, .pcOperation = L"set_meta_string" };
+                    mMod.ui32Parm0 = ::_wtoi( _wcpArgV[1] );
+                    mMod.sParm5 = pw::CUtilities::ToString( _wcpArgV[2] );
+                    oOptions.vFuncs.push_back( mMod );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( 3 );
+            }
         }
         else {
             PW_ERRORT( std::format( L"Invalid command: \"{}\".",
@@ -136,6 +156,20 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
             continue;
         }
 
+
+        for ( std::vector<pw::PW_MODIFIER>::size_type J = 0; J < oOptions.vFuncs.size(); ++J ) {
+            oOptions.vFuncs[J].stIdx = I;
+            oOptions.vFuncs[J].stTotal = oOptions.vInputs.size();
+            oOptions.vFuncs[J].paSamples = &aSamples;
+            if ( !(oOptions.vFuncs[J].pfModifier)( wfWav, oOptions.vFuncs[J], oOptions ) ) {
+                std::wcout << std::format( L"Operation {} failed on file: \"{}\"",
+                    oOptions.vFuncs[J].pcOperation,
+                    reinterpret_cast<const wchar_t *>(oOptions.vOutputs[I].c_str()) ) << std::endl;
+                continue;  
+            }
+        }
+
+
         if ( !wfWav.SaveAsPcm( oOptions.vOutputs[I].c_str(), aSamples ) ) {
             std::wcout << std::format( L"Failed to save file: \"{}\"", reinterpret_cast<const wchar_t *>(oOptions.vOutputs[I].c_str()) ) << std::endl;
             continue;
@@ -147,3 +181,52 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
 
     return 0;
 }
+
+
+namespace pw {
+
+    /**
+     * Fills in meta information in a string.
+     * 
+     * \param _sStr The string to modify.
+     * \param _stI The index of the file being processed.
+     * \param _stTotal The total number of files to process.
+     * \param _wfWav The WAV file being processed.
+     * \param _oOptions The options.
+     * \return Returns the converted string.
+     **/
+    std::u16string MetaString( const std::u16string &_sStr, std::vector<std::u16string>::size_type _stI, std::vector<std::u16string>::size_type _stTotal, const CWavFile &/*_wfWav*/,
+        PW_OPTIONS &/*_oOptions*/ ) {
+        std::u16string uCopy = CUtilities::Replace( _sStr, std::u16string( u"{idx}" ), CUtilities::ToString( _stI + 1, size_t( std::floor( std::log10( _stTotal ) ) + 1 ) ) );
+
+
+        return uCopy;
+    }
+
+    /**
+     * Sets the track number.
+     * 
+     * \param _wfFile The WAV file being modified.
+     * \param _mModifiers Associated modifer data.
+     * \param _oOptions Incoming options.
+     * \return Returns true.
+     **/
+    bool SetTrackNumber( CWavFile &_wfFile, PW_MODIFIER &_mModifiers, PW_OPTIONS &_oOptions ) {
+        std::u16string stTrack = MetaString( std::u16string( u"{idx}" ), _mModifiers.stIdx, _mModifiers.stTotal, _wfFile, _oOptions );
+        return _wfFile.AddListEntry( CWavFile::PW_M_ITRK, CUtilities::Utf16ToUtf8( stTrack.c_str() ) );
+    }
+
+    /**
+     * Sets a metadata string.
+     * 
+     * \param _wfFile The WAV file being modified.
+     * \param _mModifiers Associated modifer data.
+     * \param _oOptions Incoming options.
+     * \return Returns true.
+     **/
+    bool SetMeta( class CWavFile &_wfFile, struct PW_MODIFIER &_mModifiers, struct PW_OPTIONS &_oOptions ) {
+        std::u16string sString = MetaString( _mModifiers.sParm5, _mModifiers.stIdx, _mModifiers.stTotal, _wfFile, _oOptions );
+        return _wfFile.AddListEntry( _mModifiers.ui32Parm0, CUtilities::Utf16ToUtf8( sString.c_str() ) );
+    }
+
+}   // namespace pw
