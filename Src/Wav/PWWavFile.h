@@ -181,7 +181,7 @@ namespace pw {
 			lwaudio aAudio;
 			aAudio.push_back( _vSamples );
 			return SaveAsPcm( _pcPath, aAudio,
-			_psdSaveSettings );
+				_psdSaveSettings );
 		}
 
 		/**
@@ -266,7 +266,7 @@ namespace pw {
 		 * \param _uiSamples The number of samples per channel.
 		 * \param _uiChannels The number of channels.
 		 * \param _uiBitsPerPixel The number of bits per sample.
-		 * \return RETURN
+		 * \return Returns the size of a buffer needed to hold the given number of samples on the given number of channels in te given format.
 		 */
 		inline uint32_t													CalcSize( PW_FORMAT _fFormat, uint32_t _uiSamples, uint16_t _uiChannels, uint16_t _uiBitsPerPixel ) const {
 			switch ( _fFormat ) {

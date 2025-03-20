@@ -177,22 +177,7 @@ namespace pw {
 		 * \return Returns the sum of all the floats in the given register.
 		 **/
 		static inline float									HorizontalSum( __m512 _mReg ) {
-			// Step 1: Reduce 512 bits to 256 bits by adding high and low 256 bits.
-			__m256 mLow256 = _mm512_castps512_ps256( _mReg );			// Low 256 bits.
-			__m256 mHigh256 = _mm512_extractf32x8_ps( _mReg, 1 );		// High 256 bits.
-			__m256 mSum256 = _mm256_add_ps( mLow256, mHigh256 );
-
-			// Step 2: Reduce 256 bits to 128 bits (similar to AVX version).
-			__m128 mHigh128 = _mm256_extractf128_ps( mSum256, 1 );		// High 128 bits.
-			__m128 mLow128 = _mm256_castps256_ps128( mSum256 );			// Low 128 bits.
-			__m128 mSum128 = _mm_add_ps( mHigh128, mLow128 );			// Add them.
-
-			// Step 3: Perform horizontal addition on 128 bits.
-			__m128 mAddH1 = _mm_hadd_ps( mSum128, mSum128 );
-			__m128 mAddH2 = _mm_hadd_ps( mAddH1, mAddH1 );
-
-			// Step 4: Extract the scalar value.
-			return _mm_cvtss_f32( mAddH2 );
+			return _mm512_reduce_add_ps( _mReg );
 		}
 
 		/**
@@ -284,17 +269,10 @@ namespace pw {
 		 * \return Returns the sum of all the floats in the given register.
 		 **/
 		static inline float									HorizontalSum( __m256 &_mReg ) {
-			// Step 1 & 2: Shuffle and add the high 128 to the low 128.
-			__m128 mHigh128 = _mm256_extractf128_ps( _mReg, 1 );		// Extract high 128 bits.
-			__m128 mLow128 = _mm256_castps256_ps128( _mReg );			// Directly use low 128 bits.
-			__m128 mSum128 = _mm_add_ps( mHigh128, mLow128 );			// Add them.
-
-			// Step 3: Perform horizontal addition.
-			__m128 mAddH1 = _mm_hadd_ps( mSum128, mSum128 );
-			__m128 mAddH2 = _mm_hadd_ps( mAddH1, mAddH1 );
-
-			// Step 4: Extract the scalar value.
-			return _mm_cvtss_f32( mAddH2 );
+			__m256 mTmp = _mm256_add_ps( _mReg, _mm256_permute2f128_ps( _mReg, _mReg, 1 ) );
+			mTmp = _mm256_hadd_ps( mTmp, mTmp );
+			mTmp = _mm256_hadd_ps( mTmp, mTmp );
+			return _mm256_cvtss_f32( mTmp );
 		}
 
 		/**
@@ -485,7 +463,7 @@ namespace pw {
 			PW_PREFETCH_LINE( _pfOp1 );
 
 			while ( _sTotal >= 8 ) {
-				// Let’s do a loop of 8 at a time.
+				// Let's do a loop of 8 at a time.
 				_pfOut[0] = _pfOp0[0] + _pfOp1[0];
 				_pfOut[1] = _pfOp0[1] + _pfOp1[1];
 				_pfOut[2] = _pfOp0[2] + _pfOp1[2];
