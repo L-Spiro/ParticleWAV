@@ -168,6 +168,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\Files\PWFileBase.h" />
+    <ClInclude Include="Src\Files\PWFileStream.h" />
     <ClInclude Include="Src\Files\PWStdFile.h" />
     <ClInclude Include="Src\OS\PWApple.h" />
     <ClInclude Include="Src\OS\PWFeatureSet.h" />
@@ -175,6 +176,8 @@
     <ClInclude Include="Src\OS\PWWindows.h" />
     <ClInclude Include="Src\PWParticleWav.h" />
     <ClInclude Include="Src\Utilities\PWAlignmentAllocator.h" />
+    <ClInclude Include="Src\Utilities\PWStream.h" />
+    <ClInclude Include="Src\Utilities\PWStreamBase.h" />
     <ClInclude Include="Src\Utilities\PWUtilities.h" />
     <ClInclude Include="Src\Wav\PWWavFile.h" />
   </ItemGroup>

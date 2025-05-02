@@ -94,5 +94,14 @@
     <ClInclude Include="Src\Utilities\PWAlignmentAllocator.h">
       <Filter>Header Files\Utilities</Filter>
     </ClInclude>
+    <ClInclude Include="Src\Utilities\PWStream.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Utilities\PWStreamBase.h">
+      <Filter>Header Files\Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Files\PWFileStream.h">
+      <Filter>Header Files\Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

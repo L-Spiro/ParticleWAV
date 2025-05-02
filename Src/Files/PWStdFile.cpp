@@ -1,5 +1,5 @@
 /**
- * Copyright L. Spiro 2024
+ * Copyright L. Spiro 2022
  *
  * Written by: Shawn (L. Spiro) Wilcoxen
  *
@@ -104,7 +104,7 @@ namespace pw {
 	 * Closes the opened file.
 	 */
 	void CStdFile::Close() {
-		if ( m_pfFile != nullptr ) {
+		if PW_LIKELY( m_pfFile != nullptr ) {
 			::fclose( m_pfFile );
 			m_pfFile = nullptr;
 			m_ui64Size = 0;
@@ -118,7 +118,7 @@ namespace pw {
 	 * \return Returns true if the file was successfully loaded into memory.
 	 */
 	bool CStdFile::LoadToMemory( std::vector<uint8_t> &_vResult ) const {
-		if ( m_pfFile != nullptr ) {
+		if PW_LIKELY( m_pfFile != nullptr ) {
 #ifdef PW_WINDOWS
 			__int64 i64Pos = ::_ftelli64( m_pfFile );
 			::_fseeki64( m_pfFile, 0, SEEK_END );
@@ -168,6 +168,17 @@ namespace pw {
 	}
 
 	/**
+	 * Reads from the file.
+	 * 
+	 * \param _pvDst The destination for the read.  Must be sized appropriately to contain _sSize bytes.
+	 * \param _sSize The number of bytes to read.
+	 * \return Returns true if the read succeeded.  The file must be opened for read and the read operation must not extend beyond the end of the file.
+	 **/
+	bool CStdFile::Read( void * _pvDst, size_t _sSize ) {
+		return std::fread( _pvDst, _sSize, 1, m_pfFile ) == 1;
+	}
+
+	/**
 	 * Writes the given data to the created file.  File must have been cerated with Create().
 	 *
 	 * \param _vData The data to write to the file.
@@ -178,17 +189,63 @@ namespace pw {
 	}
 
 	/**
+	 * Gets the current position inside the file.
+	 * 
+	 * \return Returns the current position inside the file.
+	 **/
+	uint64_t CStdFile::GetPos() const {
+#ifdef PW_WINDOWS
+		return ::_ftelli64( m_pfFile );
+#else
+		return uint64_t( std::ftell( m_pfFile ) );
+#endif	// #ifdef PW_WINDOWS
+	}
+
+	/**
 	 * Writes the given data to the created file.  File must have been cerated with Create().
 	 *
 	 * \param _pui8Data The data to write to the file.
-	 * \param _tsSize The size of the buffer to which _pui8Data points.
+	 * \param _sSize The size of the buffer to which _pui8Data points.
 	 * \return Returns true if the data was successfully written to the file.
 	 */
-	bool CStdFile::WriteToFile( const uint8_t * _pui8Data, size_t _tsSize ) {
-		if ( m_pfFile != nullptr ) {
-			return std::fwrite( _pui8Data, _tsSize, 1, m_pfFile ) == 1;
+	bool CStdFile::WriteToFile( const uint8_t * _pui8Data, size_t _sSize ) {
+		if PW_LIKELY( m_pfFile != nullptr ) {
+			return std::fwrite( _pui8Data, _sSize, 1, m_pfFile ) == 1;
 		}
 		return false;
+	}
+
+	/**
+	 * Moves the file pointer from the current position and returns the new position.
+	 * 
+	 * \param _i64Offset Amount by which to move the file pointer.
+	 * \return Returns the new line position.
+	 **/
+	uint64_t CStdFile::MovePointerBy( int64_t _i64Offset ) const {
+#ifdef PW_WINDOWS
+		::_fseeki64( m_pfFile, _i64Offset, SEEK_CUR );
+		return ::_ftelli64( m_pfFile );
+#else
+		std::fseek( m_pfFile, static_cast<long>(_i64Offset), SEEK_CUR );
+		return uint64_t( std::ftell( m_pfFile ) );
+#endif	// #ifdef PW_WINDOWS
+	}
+
+	/**
+	 * Moves the file pointer to the given file position.
+	 * 
+	 * \param _ui64Pos The new file position to set.
+	 * \param _bFromEnd Whether _ui64Pos is from the end of the file or not. 
+	 * \return Returns the new file position.
+	 **/
+	uint64_t CStdFile::MovePointerTo( uint64_t _ui64Pos, bool _bFromEnd ) const {
+#ifdef PW_WINDOWS
+		::_fseeki64( m_pfFile, static_cast<long long>(_ui64Pos), _bFromEnd ? SEEK_END : SEEK_SET );
+		return ::_ftelli64( m_pfFile );
+#else
+		::fseeko( m_pfFile, static_cast<off_t>(_ui64Pos), _bFromEnd ? SEEK_END : SEEK_SET );
+		return ::ftello( m_pfFile );
+#endif	// #ifdef PW_WINDOWS
 	}
 
 	/**

@@ -34,18 +34,29 @@
 
 
 #if defined( _MSC_VER )
-	#define PW_FORCEINLINE 					__forceinline
+    // Microsoft Visual Studio Compiler
+    #define PW_ALIGN( n ) 						__declspec( align( n ) )
+	#define	PW_FALLTHROUGH						[[fallthrough]];
+
+	#define PW_FORCEINLINE 						__forceinline
 	#define PW_PREFETCH_LINE( ADDR )			_mm_prefetch( reinterpret_cast<const char *>(ADDR), _MM_HINT_T0 );
-    #define PW_LIKELY(x) (x)
-    #define PW_UNLIKELY(x) (x)
+    #define PW_LIKELY( x )						( x ) [[likely]]
+    #define PW_UNLIKELY( x )					( x ) [[unlikely]]
+	#define PW_STDCALL							__stdcall
 #elif defined( __GNUC__ ) || defined( __clang__ )
-	#define PW_FORCEINLINE 					__inline__ __attribute__( (__always_inline__) )
+    // GNU Compiler Collection (GCC) or Clang
+    #define PW_ALIGN( n ) 						__attribute__( (aligned( n )) )
+	#define	PW_FALLTHROUGH
+
+	#define PW_FORCEINLINE 						__inline__ __attribute__( (__always_inline__) )
 	#define PW_PREFETCH_LINE( ADDR )			__builtin_prefetch( reinterpret_cast<const void *>(ADDR), 1, 1 );
-    #define PW_LIKELY(x)                       __builtin_expect(!!(x), 1)
-    #define PW_UNLIKELY(x)                     __builtin_expect(!!(x), 0)
-    #define __assume(x)
+    #define PW_LIKELY( x )						( __builtin_expect( !!(x), 1 ) )
+    #define PW_UNLIKELY( x )					( __builtin_expect( !!(x), 0 ) )
+    #define __assume( x )
+	#define PW_STDCALL
 #else
-	#define PW_FORCEINLINE inline
+	#define PW_FORCEINLINE						inline
+    #error "Unsupported compiler"
 #endif
 
 #ifdef PW_WINDOWS

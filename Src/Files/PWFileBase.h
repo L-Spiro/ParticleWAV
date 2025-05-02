@@ -81,6 +81,24 @@ namespace pw {
 		virtual bool										LoadToMemory( std::vector<uint8_t> &_vResult ) const;
 
 		/**
+		 * Reads from the file.
+		 * 
+		 * \param _pvDst The destination for the read.  Must be sized appropriately to contain _sSize bytes.
+		 * \param _sSize The number of bytes to read.
+		 * \return Returns true if the read succeeded.  The file must be opened for read and the read operation must not extend beyond the end of the file.
+		 **/
+		virtual bool										Read( void * /*_pvDst*/, size_t /*_sSize*/ ) { return false; }
+
+		/**
+		 * Writes to the file.
+		 * 
+		 * \param _pvSrc The source for the write.
+		 * \param _sSize The number of bytes to write.
+		 * \return Returns true if the write succeeded.  The file must be opened for write and there must be enough room to extend the file size.
+		 **/
+		virtual bool										Write( const void * /*_pvSrc*/, size_t /*_sSize*/ ) { return false; }
+
+		/**
 		 * Gathers the file names in the archive into an array.
 		 *
 		 * \param _vResult The location where to store the file names.
@@ -96,6 +114,37 @@ namespace pw {
 		 * \return Returns true if the file was extracted successfully.
 		 */
 		virtual bool										ExtractToMemory( const std::u16string &_s16File, std::vector<uint8_t> &_vResult ) const;
+
+		/**
+		 * Gets the size of the file.
+		 * 
+		 * \return Returns the size of the file.
+		 **/
+		virtual uint64_t									Size() const { return 0; }
+
+		/**
+		 * Gets the current position inside the file.
+		 * 
+		 * \return Returns the current position inside the file.
+		 **/
+		virtual uint64_t									GetPos() const { return 0; }
+
+		/**
+		 * Moves the file pointer from the current position and returns the new position.
+		 * 
+		 * \param _i64Offset Amount by which to move the file pointer.
+		 * \return Returns the new line position.
+		 **/
+		virtual uint64_t									MovePointerBy( int64_t /*_i64Offset*/ ) const { return 0; }
+
+		/**
+		 * Moves the file pointer to the given file position.
+		 * 
+		 * \param _ui64Pos The new file position to set.
+		 * \param _bFromEnd Whether _ui64Pos is from the end of the file or not. 
+		 * \return Returns the new file position.
+		 **/
+		virtual uint64_t									MovePointerTo( uint64_t /*_ui64Pos*/, bool /*_bFromEnd*/ = false ) const { return 0; }
 
 		/**
 		 * Finds files/folders in a given directory.
