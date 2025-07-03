@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Copyright L. Spiro 2024
  *
  * Written by: Shawn (L. Spiro) Wilcoxen
@@ -14,8 +14,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 //#include <intrin.h>
 #include <numbers>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -831,6 +833,175 @@ namespace pw {
 			_mm512_store_si512( reinterpret_cast<__m512i *>( _pi32Dst ), vInt32Vals );
 		}
 #endif	// #ifdef __AVX512F__
+
+
+
+		/**
+		 * \brief Solve a linear system via Gaussian elimination with partial pivoting.
+		 * 
+		 * \param _tMat Row-major square matrix (n×n), will be modified.
+		 * \param _tVec Right-hand side vector of length n, will be modified.
+		 * \param _sDim  Dimension n.
+		 * \returns Solution vector of length n (empty on singular).
+		 */
+		template <typename _tType = std::vector<double>>
+		static _tType										SolveLinearSystem( _tType &_tMat, _tType &_tVec, size_t _sDim ) {
+			const double dEps = 1e-12;
+			size_t sDim = _sDim;
+			for ( size_t K = 0; K < sDim; ++K ) {
+				// Partial pivot.
+				size_t sPivot = K;
+				double dMax = std::abs( _tMat[K*sDim+K] );
+				for ( size_t I = K + 1; I < sDim; ++I ) {
+					double dVal = std::abs( _tMat[I*sDim+K] );
+					if ( dVal > dMax ) {
+						dMax = dVal;
+						sPivot = I;
+					}
+				}
+				if ( dMax < dEps ) { return {}; }
+				if ( sPivot != K ) {
+					for ( size_t J = K; J < sDim; ++J ) {
+						std::swap( _tMat[K*sDim+J], _tMat[sPivot*sDim+J] );
+					}
+					std::swap( _tVec[K], _tVec[sPivot] );
+				}
+				// Eliminate below.
+				for ( size_t I = K + 1; I < sDim; ++I ) {
+					double dFactor = _tMat[I*sDim+K] / _tMat[K*sDim+K];
+					for ( size_t J = K; J < sDim; ++J ) {
+						_tMat[I*sDim+J] -= dFactor * _tMat[K*sDim+J];
+					}
+					_tVec[I] -= dFactor * _tVec[K];
+				}
+			}
+
+			// Back-substitution.
+			_tType vX( sDim );
+			for ( int I = int( sDim ) - 1; I >= 0; --I ) {
+				double dSum = _tVec[I];
+				for ( size_t J = I + 1; J < sDim; ++J ) {
+					dSum -= _tMat[I*sDim+J] * vX[J];
+				}
+				if ( std::abs( _tMat[I*sDim+I] ) < dEps ) { return {}; }
+				vX[I] = dSum / _tMat[I*sDim+I];
+			}
+
+			return vX;
+		}
+
+		/**
+		 * \brief Fit raw samples to X cascaded 1st-order HPFs and return cut-off frequencies.
+		 * 
+		 * \param _tSamples    Raw transient samples (noisy).
+		 * \param _dSampleRate Sample rate in Hz.
+		 * \param _sNumPoles   Number of HPF poles (X).
+		 * \throws std::runtime_error on failure.
+		 */
+		template <typename _tType = std::vector<double>>
+		static _tType										FitHPFCutoffs( const _tType &_tSamples, double _dSampleRate, size_t _sNumPoles ) {
+			if ( _tSamples.empty() || _dSampleRate <= 0.0 || _sNumPoles == 0 ) { throw std::runtime_error( "Invalid inputs to FitHPFCutoffs" ); }
+
+			size_t sNumSamples = _tSamples.size();
+			size_t sNumParams  = 2 * _sNumPoles;  // [A0..A{X-1}, tau0..tau{X-1}]
+
+			// Initialize parameters.
+			_tType vParams( sNumParams );
+			double dInitA   = _tSamples.front() / double( _sNumPoles );
+			double dInitTau = 1.0 / ( 2.0 * PW_PI * 1000.0 );				// Guess 1 kHz.
+			for ( size_t I = 0; I < _sNumPoles; ++I ) {
+				vParams[I]				= dInitA;
+				vParams[_sNumPoles+I]	= dInitTau;
+			}
+
+			const int    kMaxIter = 20;
+			const double dTol     = 1e-6;
+			_tType vNormalMat( sNumParams * sNumParams );
+			_tType vNormalVec( sNumParams );
+
+			// Gauss–Newton iterations,
+			for ( int sIter = 0; sIter < kMaxIter; ++sIter ) {
+				std::fill( vNormalMat.begin(), vNormalMat.end(), 0.0 );
+				std::fill( vNormalVec.begin(), vNormalVec.end(), 0.0 );
+
+				for ( size_t N = 0; N < sNumSamples; ++N ) {
+					double dT			= double( N ) / _dSampleRate;
+					double dYObs		= _tSamples[N];
+					double dYModel		= 0.0;
+
+					// Model evaluation.
+					for ( size_t I = 0; I < _sNumPoles; ++I ) {
+						double dA		= vParams[I];
+						double dTau		= vParams[_sNumPoles+I];
+						dYModel		   += dA * std::exp( -dT / dTau );
+					}
+
+					double dRes = dYObs - dYModel;
+
+					// Jacobian & normal equations.
+					for ( size_t I = 0; I < _sNumPoles; ++I ) {
+						double dA		= vParams[I];
+						double dTau		= vParams[_sNumPoles+I];
+						double dE		= std::exp( -dT / dTau );
+
+						double dJA		= dE;									// ∂f/∂A_i
+						double dJTau	= dA * dE * (dT / (dTau * dTau));		// ∂f/∂tau_i
+
+						size_t sIdxA	= I;
+						size_t sIdxT	= _sNumPoles + I;
+
+						// Accumulate J^T·r.
+						vNormalVec[sIdxA] += dJA   * dRes;
+						vNormalVec[sIdxT] += dJTau * dRes;
+
+						// Accumulate J^T·J (upper triangle).
+						for ( size_t J = sIdxA; J < sNumParams; ++J ) {
+							double dJJ = (J < _sNumPoles)
+										 ? std::exp( -dT / vParams[J] )
+										 : vParams[J-_sNumPoles] 
+										   * std::exp( -dT / vParams[J-_sNumPoles] )
+										   * (dT / (vParams[J-_sNumPoles] * vParams[J-_sNumPoles]));
+							vNormalMat[sIdxA*sNumParams+J] += dJA * dJJ;
+						}
+						for ( size_t J = sIdxT; J < sNumParams; ++J ) {
+							double dJJ = (J < _sNumPoles)
+										 ? std::exp( -dT / vParams[J] )
+										 : vParams[J-_sNumPoles] 
+										   * std::exp( -dT / vParams[J-_sNumPoles] )
+										   * (dT / (vParams[J-_sNumPoles] * vParams[J-_sNumPoles]));
+							vNormalMat[sIdxT*sNumParams+J] += dJTau * dJJ;
+						}
+					}
+				}
+
+				// Symmetrize the normal matrix.
+				for ( size_t I = 0; I < sNumParams; ++I ) {
+					for ( size_t J = 0; J < I; ++J ) {
+						vNormalMat[I*sNumParams+J] = vNormalMat[J*sNumParams+I];
+					}
+				}
+
+				// Solve for parameter update Δ.
+				auto vDelta = SolveLinearSystem( vNormalMat, vNormalVec, sNumParams );
+				if ( vDelta.size() != sNumParams ) { throw std::runtime_error( "Solver failure in FitHPFCutoffs" ); }
+
+				double dMaxDelta = 0.0;
+				for ( size_t I = 0; I < sNumParams; ++I ) {
+					vParams[I] += vDelta[I];
+					dMaxDelta = std::max( dMaxDelta, std::abs( vDelta[I] ) );
+				}
+				if ( dMaxDelta < dTol ) { break; }
+			}
+
+			// Compute cut-off frequencies f_c = 1/(2π·tau_i).
+			_tType vCutoffs( _sNumPoles );
+			for ( size_t I = 0; I < _sNumPoles; ++I ) {
+				double dTau = vParams[_sNumPoles + I];
+				if ( dTau <= 0.0 ) { throw std::runtime_error( "Invalid tau in result" ); }
+				vCutoffs[I] = 1.0 / (2.0 * PW_PI * dTau);
+			}
+			return vCutoffs;
+		}
 
 	};
 

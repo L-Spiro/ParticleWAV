@@ -128,6 +128,7 @@ namespace pw {
 			PW_FORMAT													fFormat = PW_F_PCM;
 			uint32_t													uiHz = 0;					// Only overrides if not 0.
 			uint16_t													uiBitsPerSample = 0;		// Only overrides if not 0.
+			bool														bDither = false;
 
 			PW_SAVE_DATA() :
 				fFormat( PW_F_PCM ),
@@ -159,7 +160,7 @@ namespace pw {
 			bool														bEnabled = false;
 			bool														bDither = false;
 
-			PW_START_CONDITIONS										scStartCondition = PW_SC_NONE;
+			PW_START_CONDITIONS											scStartCondition = PW_SC_NONE;
 			uint64_t													ui64StartParm = 0;
 			double														dStartParm = 0.0;
 			PW_END_CONDITIONS											seEndCondition = PW_EC_NONE;
@@ -418,6 +419,9 @@ namespace pw {
 
 			uint32_t uiFmtSize = fcChunk.chHeader.uiSize + 8;
 			uint32_t ui32DataSize = CalcSize( static_cast<PW_FORMAT>(fcChunk.uiAudioFormat), static_cast<uint32_t>(_vSamples[0].size()), static_cast<uint16_t>(_vSamples.size()), fcChunk.uiBitsPerSample );
+			if ( ui32DataSize & 1 ) {
+				++ui32DataSize;
+			}
 
 			uint32_t ui32Size = 4 +							// "WAVE".
 				uiFmtSize +									// "fmt " chunk.
@@ -441,9 +445,6 @@ namespace pw {
 
 			// Append the "data" chunk.
 			PW_PUSH32( PW_C_DATA );
-			if ( ui32DataSize & 1 ) {
-				++ui32DataSize;
-			}
 			PW_PUSH32( ui32DataSize );
 			switch ( fcChunk.uiAudioFormat ) {
 				case PW_F_PCM : {
@@ -453,7 +454,12 @@ namespace pw {
 							break;
 						}
 						case 16 : {
-							if ( !BatchF64ToPcm16( _vSamples, vRet ) ) { return false; }
+							if ( _psdSaveSettings && _psdSaveSettings->bDither ) {
+								if ( !BatchF64ToPcm16_Dither( _vSamples, vRet ) ) { return false; }
+							}
+							else {
+								if ( !BatchF64ToPcm16( _vSamples, vRet ) ) { return false; }
+							}
 							break;
 						}
 						case 24 : {
@@ -1073,7 +1079,7 @@ namespace pw {
 		 * \param _vDst The buffer to which to convert the samples.
 		 * \return Returns trye if all samples were added to the buffer.
 		 */
-		template <typename _tType = lwtrack>
+		template <typename _tType = lwaudio>
 		static bool														BatchF64ToPcm8( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			for ( size_t I = 0; I < _vSrc[0].size(); ++I ) {
 				for ( size_t J = 0; J < _vSrc.size(); ++J ) {
@@ -1091,7 +1097,7 @@ namespace pw {
 		 * \param _vDst The buffer to which to convert the samples.
 		 * \return Returns trye if all samples were added to the buffer.
 		 */
-		template <typename _tType = lwtrack>
+		template <typename _tType = lwaudio>
 		static bool														BatchF64ToPcm16( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			try {
 				const double dFactor = std::pow( 2.0, 16.0 - 1.0 ) - 1.0;
@@ -1169,7 +1175,35 @@ namespace pw {
 		 * \param _vDst The buffer to which to convert the samples.
 		 * \return Returns trye if all samples were added to the buffer.
 		 */
-		template <typename _tType = lwtrack>
+		template <typename _tType = lwaudio>
+		static bool														BatchF64ToPcm16_Dither( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
+			try {
+				const double dFactor = std::pow( 2.0, 16.0 - 1.0 ) - 1.0;
+				auto stNumSamples = _vSrc[0].size();
+				auto stNumChannels = _vSrc.size();
+				auto aSize = _vDst.size();
+				_vDst.reserve( _vDst.size() + stNumSamples * stNumChannels * sizeof( int16_t ) );
+				int16_t * pi16Dst = reinterpret_cast<int16_t *>(_vDst.data() + aSize);
+				double dError = 0.0;
+
+				for ( size_t I = 0; I < _vSrc[0].size(); ++I ) {
+					for ( size_t J = 0; J < _vSrc.size(); ++J ) {
+						(*pi16Dst++) = CUtilities::SampleToI16_Dither( _vSrc[J][I], dError );
+					}
+				}
+				return true;
+			}
+			catch ( ... ) { return false; }
+		}
+
+		/**
+		 * Converts a batch of F64 samples to PCM samples.
+		 *
+		 * \param _vSrc The samples to convert.
+		 * \param _vDst The buffer to which to convert the samples.
+		 * \return Returns trye if all samples were added to the buffer.
+		 */
+		template <typename _tType = lwaudio>
 		static bool														BatchF64ToPcm24( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			try {
 				const double dFactor = std::pow( 2.0, 24.0 - 1.0 ) - 1.0;
@@ -1202,7 +1236,7 @@ namespace pw {
 		 * \param _vDst The buffer to which to convert the samples.
 		 * \return Returns trye if all samples were added to the buffer.
 		 */
-		template <typename _tType = lwtrack>
+		template <typename _tType = lwaudio>
 		static bool														BatchF64ToPcm32( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			try {
 				const double dFactor = std::pow( 2.0, 32.0 - 1.0 ) - 1.0;
@@ -1278,7 +1312,7 @@ namespace pw {
 		 * \param _vDst The buffer to which to convert the samples.
 		 * \return Returns trye if all samples were added to the buffer.
 		 */
-		template <typename _tType = lwtrack>
+		template <typename _tType = lwaudio>
 		static bool														BatchF64ToF32( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			try {
 				auto stNumSamples = _vSrc[0].size();
