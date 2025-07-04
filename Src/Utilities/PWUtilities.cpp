@@ -7,7 +7,9 @@
  */
 
 #include "PWUtilities.h"
+#include "../Filters/PWHpfFilter.h"
 #include "../OS/PWOs.h"
+#include "../Wav/PWWavFile.h"
 
 namespace pw {
 
@@ -152,6 +154,63 @@ namespace pw {
 			vRet.push_back( sTmp );
 		}
 		return vRet;
+	}
+
+	/**
+	 * Loads a given region of a given WAV file and analyzes for the given number of HPFÅfs.  Call within try/catch.
+	 * 
+	 * \param _pwcPath The WAV file to load.
+	 * \param _sNumPoles The number of HPF influences to find.
+	 * \param _ui32Start The starting sample from the file to analyze.
+	 * \param _ui32Total The number of samples to analyze.
+	 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
+	 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+	 **/
+	bool CUtilities::SolveForHpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total ) {
+		pw::CWavFile wfWav;
+		if ( !wfWav.Open( _pwcPath, pw::CWavFile::PW_LF_DATA, _ui32Start, _ui32Start + _ui32Total ) ) { return false; }
+
+		pw::CWavFile::lwaudio vSamples;
+		vSamples.resize( wfWav.Channels() );
+		if ( !wfWav.GetAllSamples( vSamples ) ) {
+			throw std::runtime_error( "Failed to gather WAV-file samples." );
+		}
+		if ( !vSamples.size() ) { return false; }
+
+		//auto vCutOffs = FitHPFCutoffs<pw::CWavFile::lwtrack>( vSamples[0], double( wfWav.Hz() ), _sNumPoles );
+		pw::CWavFile::lwtrack vTmp;
+		std::vector<double> vHpfs;
+		std::vector<double> vRefDcs;
+		std::vector<double> vLastScores;
+		std::vector<bool> vLastDirUp;
+		std::vector<pw::CHpfFilter> vHpfFilters;
+		vHpfFilters.resize( _sNumPoles );
+		vRefDcs.resize( _sNumPoles );
+		vLastScores.resize( _sNumPoles );
+		vLastDirUp.resize( _sNumPoles );
+		size_t sStartSample = 0;
+		for ( size_t I = 0; I < _sNumPoles; ++I ) {
+			vHpfs.push_back( std::pow( 300.0, 1 - I / (_sNumPoles - 1.0) ) );
+			vHpfFilters[I].CreateHpf( vHpfs[I], float( wfWav.Hz() ) );
+			auto aDc = FindFuzzyDCCrossing( vSamples[0], sStartSample, 0.0 );
+			vRefDcs[I] = aDc.first;
+			sStartSample = aDc.second;
+			vLastDirUp[I] = true;
+		}
+
+		vTmp.resize( vSamples[0].size() );
+		for ( size_t I = 0; I < vTmp.size(); ++I ) {
+			vTmp[I] = vSamples[0][0];
+		}
+		for ( size_t I = 0; I < vTmp.size(); ++I ) {
+			double dSample = vTmp[I];
+			for ( size_t J = 0; J < vHpfFilters.size(); ++J ) {
+				dSample = vHpfFilters[J].Process( dSample );
+			}
+			vTmp[I] = dSample;
+		}
+		
+		return true;
 	}
 
 }	// namespace pw

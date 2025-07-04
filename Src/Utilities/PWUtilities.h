@@ -27,8 +27,12 @@
 #endif	// #ifndef PW_ELEMENTS
 
 #ifndef PW_PI
-#define PW_PI												3.1415926535897932384626433832795
+#define PW_PI												3.14159265358979323846264338327950288419716939937510	// You can tell how cool a programmer is by how many digits she puts in the PI macro.  True story.
 #endif	// #ifndef PW_PI
+
+#ifndef M_PI
+#define M_PI												PW_PI
+#endif	// #ifndef M_PI
 
 
 namespace pw {
@@ -834,175 +838,65 @@ namespace pw {
 		}
 #endif	// #ifdef __AVX512F__
 
-
-
 		/**
-		 * \brief Solve a linear system via Gaussian elimination with partial pivoting.
+		 * Computes the mean squared error between two waveforms.
 		 * 
-		 * \param _tMat Row-major square matrix (n×n), will be modified.
-		 * \param _tVec Right-hand side vector of length n, will be modified.
-		 * \param _sDim  Dimension n.
-		 * \returns Solution vector of length n (empty on singular).
+		 * \param _vA First waveform samples.
+		 * \param _vB Second waveform samples.
+		 * \returns Mean squared error.
 		 */
 		template <typename _tType = std::vector<double>>
-		static _tType										SolveLinearSystem( _tType &_tMat, _tType &_tVec, size_t _sDim ) {
-			const double dEps = 1e-12;
-			size_t sDim = _sDim;
-			for ( size_t K = 0; K < sDim; ++K ) {
-				// Partial pivot.
-				size_t sPivot = K;
-				double dMax = std::abs( _tMat[K*sDim+K] );
-				for ( size_t I = K + 1; I < sDim; ++I ) {
-					double dVal = std::abs( _tMat[I*sDim+K] );
-					if ( dVal > dMax ) {
-						dMax = dVal;
-						sPivot = I;
-					}
-				}
-				if ( dMax < dEps ) { return {}; }
-				if ( sPivot != K ) {
-					for ( size_t J = K; J < sDim; ++J ) {
-						std::swap( _tMat[K*sDim+J], _tMat[sPivot*sDim+J] );
-					}
-					std::swap( _tVec[K], _tVec[sPivot] );
-				}
-				// Eliminate below.
-				for ( size_t I = K + 1; I < sDim; ++I ) {
-					double dFactor = _tMat[I*sDim+K] / _tMat[K*sDim+K];
-					for ( size_t J = K; J < sDim; ++J ) {
-						_tMat[I*sDim+J] -= dFactor * _tMat[K*sDim+J];
-					}
-					_tVec[I] -= dFactor * _tVec[K];
-				}
+		double												GradeSimilarity( const _tType &_vA, const _tType &_vB ) {
+			size_t sN = std::min( _vA.size(), _vB.size() );
+			double dMSE = 0.0;
+			for ( size_t I = 0; I < sN; ++I ) {
+				double dErr		= _vA[I] - _vB[I];
+				dMSE		   += dErr * dErr;
 			}
-
-			// Back-substitution.
-			_tType vX( sDim );
-			for ( int I = int( sDim ) - 1; I >= 0; --I ) {
-				double dSum = _tVec[I];
-				for ( size_t J = I + 1; J < sDim; ++J ) {
-					dSum -= _tMat[I*sDim+J] * vX[J];
-				}
-				if ( std::abs( _tMat[I*sDim+I] ) < dEps ) { return {}; }
-				vX[I] = dSum / _tMat[I*sDim+I];
-			}
-
-			return vX;
+			return dMSE / double( sN );
 		}
 
 		/**
-		 * \brief Fit raw samples to X cascaded 1st-order HPFs and return cut-off frequencies.
+		 * Finds the next fuzzy DC crossing cluster starting at a given sample index.
 		 * 
-		 * \param _tSamples    Raw transient samples (noisy).
-		 * \param _dSampleRate Sample rate in Hz.
-		 * \param _sNumPoles   Number of HPF poles (X).
-		 * \throws std::runtime_error on failure.
+		 * \param _vSamples Waveform samples.
+		 * \param _sStartIndex Index to start search.
+		 * \param _dThreshold Absolute amplitude threshold for considering zero.
+		 * \returns Pair of (firstIndex, lastIndex) of the cluster, or (n,n) if none.
 		 */
 		template <typename _tType = std::vector<double>>
-		static _tType										FitHPFCutoffs( const _tType &_tSamples, double _dSampleRate, size_t _sNumPoles ) {
-			if ( _tSamples.empty() || _dSampleRate <= 0.0 || _sNumPoles == 0 ) { throw std::runtime_error( "Invalid inputs to FitHPFCutoffs" ); }
-
-			size_t sNumSamples = _tSamples.size();
-			size_t sNumParams  = 2 * _sNumPoles;  // [A0..A{X-1}, tau0..tau{X-1}]
-
-			// Initialize parameters.
-			_tType vParams( sNumParams );
-			double dInitA   = _tSamples.front() / double( _sNumPoles );
-			double dInitTau = 1.0 / ( 2.0 * PW_PI * 1000.0 );				// Guess 1 kHz.
-			for ( size_t I = 0; I < _sNumPoles; ++I ) {
-				vParams[I]				= dInitA;
-				vParams[_sNumPoles+I]	= dInitTau;
-			}
-
-			const int    kMaxIter = 20;
-			const double dTol     = 1e-6;
-			_tType vNormalMat( sNumParams * sNumParams );
-			_tType vNormalVec( sNumParams );
-
-			// Gauss–Newton iterations,
-			for ( int sIter = 0; sIter < kMaxIter; ++sIter ) {
-				std::fill( vNormalMat.begin(), vNormalMat.end(), 0.0 );
-				std::fill( vNormalVec.begin(), vNormalVec.end(), 0.0 );
-
-				for ( size_t N = 0; N < sNumSamples; ++N ) {
-					double dT			= double( N ) / _dSampleRate;
-					double dYObs		= _tSamples[N];
-					double dYModel		= 0.0;
-
-					// Model evaluation.
-					for ( size_t I = 0; I < _sNumPoles; ++I ) {
-						double dA		= vParams[I];
-						double dTau		= vParams[_sNumPoles+I];
-						dYModel		   += dA * std::exp( -dT / dTau );
-					}
-
-					double dRes = dYObs - dYModel;
-
-					// Jacobian & normal equations.
-					for ( size_t I = 0; I < _sNumPoles; ++I ) {
-						double dA		= vParams[I];
-						double dTau		= vParams[_sNumPoles+I];
-						double dE		= std::exp( -dT / dTau );
-
-						double dJA		= dE;									// ∂f/∂A_i
-						double dJTau	= dA * dE * (dT / (dTau * dTau));		// ∂f/∂tau_i
-
-						size_t sIdxA	= I;
-						size_t sIdxT	= _sNumPoles + I;
-
-						// Accumulate J^T·r.
-						vNormalVec[sIdxA] += dJA   * dRes;
-						vNormalVec[sIdxT] += dJTau * dRes;
-
-						// Accumulate J^T·J (upper triangle).
-						for ( size_t J = sIdxA; J < sNumParams; ++J ) {
-							double dJJ = (J < _sNumPoles)
-										 ? std::exp( -dT / vParams[J] )
-										 : vParams[J-_sNumPoles] 
-										   * std::exp( -dT / vParams[J-_sNumPoles] )
-										   * (dT / (vParams[J-_sNumPoles] * vParams[J-_sNumPoles]));
-							vNormalMat[sIdxA*sNumParams+J] += dJA * dJJ;
+		static std::pair<size_t, size_t>					FindFuzzyDCCrossing( const _tType &_vSamples, size_t _sStartIndex, double _dThreshold ) {
+			size_t sN = _vSamples.size();
+			for ( size_t I = _sStartIndex + 1; I < sN; ++I ) {
+				double dY0 = _vSamples[I-1];
+				double dY1 = _vSamples[I];
+				if ( (dY0 > 0 && dY1 < 0) || (dY0 < 0 && dY1 > 0) || (std::abs( dY1 ) <= _dThreshold) ) {
+					size_t sFirst	= I - 1;
+					size_t sLast	= I;
+					size_t J		= I + 1;
+					for ( ; J < sN; ++J ) {
+						if ( std::abs( _vSamples[J] ) <= _dThreshold ) {
+							sLast = J;
 						}
-						for ( size_t J = sIdxT; J < sNumParams; ++J ) {
-							double dJJ = (J < _sNumPoles)
-										 ? std::exp( -dT / vParams[J] )
-										 : vParams[J-_sNumPoles] 
-										   * std::exp( -dT / vParams[J-_sNumPoles] )
-										   * (dT / (vParams[J-_sNumPoles] * vParams[J-_sNumPoles]));
-							vNormalMat[sIdxT*sNumParams+J] += dJTau * dJJ;
-						}
+						else { break; }
 					}
+					return std::make_pair( sFirst, sLast );
 				}
-
-				// Symmetrize the normal matrix.
-				for ( size_t I = 0; I < sNumParams; ++I ) {
-					for ( size_t J = 0; J < I; ++J ) {
-						vNormalMat[I*sNumParams+J] = vNormalMat[J*sNumParams+I];
-					}
-				}
-
-				// Solve for parameter update Δ.
-				auto vDelta = SolveLinearSystem( vNormalMat, vNormalVec, sNumParams );
-				if ( vDelta.size() != sNumParams ) { throw std::runtime_error( "Solver failure in FitHPFCutoffs" ); }
-
-				double dMaxDelta = 0.0;
-				for ( size_t I = 0; I < sNumParams; ++I ) {
-					vParams[I] += vDelta[I];
-					dMaxDelta = std::max( dMaxDelta, std::abs( vDelta[I] ) );
-				}
-				if ( dMaxDelta < dTol ) { break; }
 			}
-
-			// Compute cut-off frequencies f_c = 1/(2π·tau_i).
-			_tType vCutoffs( _sNumPoles );
-			for ( size_t I = 0; I < _sNumPoles; ++I ) {
-				double dTau = vParams[_sNumPoles + I];
-				if ( dTau <= 0.0 ) { throw std::runtime_error( "Invalid tau in result" ); }
-				vCutoffs[I] = 1.0 / (2.0 * PW_PI * dTau);
-			}
-			return vCutoffs;
+			return std::make_pair( sN, sN );
 		}
 
+		/**
+		 * Loads a given region of a given WAV file and analyzes for the given number of HPF’s.  Call within try/catch.
+		 * 
+		 * \param _pwcPath The WAV file to load.
+		 * \param _sNumPoles The number of HPF influences to find.
+		 * \param _ui32Start The starting sample from the file to analyze.
+		 * \param _ui64Total The number of samples to analyze.
+		 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
+		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+		 **/
+		static bool											SolveForHpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total );
 	};
 
 }	// namespace pw

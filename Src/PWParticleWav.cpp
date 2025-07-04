@@ -124,6 +124,25 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
                 catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
                 PW_ADV( 3 );
             }
+
+			// =================================
+			// ANALYSIS
+			// =================================
+			if ( PW_CHECK( 5, anlz_freq_resp_hpf ) ) {
+				// File Name
+				// Number of HPS's.
+				// Start Sample.
+				// Total Samples.
+                try {
+                    auto pu16File = reinterpret_cast<const char16_t *>((_wcpArgV[1]));
+					size_t sTotalHpfs = ::_wtoi( _wcpArgV[2] );
+					uint32_t ui32Start = uint32_t( ::_wtoll( _wcpArgV[3] ) );
+					uint32_t ui32Total = uint32_t( ::_wtoll( _wcpArgV[4] ) );
+					auto bRet = pw::CUtilities::SolveForHpfs( pu16File, sTotalHpfs, ui32Start, ui32Total );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( 5 );
+            }
         }
         else {
             PW_ERRORT( std::format( L"Invalid command: \"{}\".",

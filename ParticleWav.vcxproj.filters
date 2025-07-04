@@ -37,6 +37,9 @@
     <Filter Include="Source Files\Wav">
       <UniqueIdentifier>{2050e161-d56c-4730-8f80-17bfada06c87}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\Filters">
+      <UniqueIdentifier>{72340e9f-04ba-44dd-a98d-c2244894b262}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Src\PWParticleWav.cpp">
@@ -102,6 +105,12 @@
     </ClInclude>
     <ClInclude Include="Src\Files\PWFileStream.h">
       <Filter>Header Files\Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Filters\PWHpfFilter.h">
+      <Filter>Header Files\Filters</Filter>
+    </ClInclude>
+    <ClInclude Include="Src\Filters\PWAudioFilterBase.h">
+      <Filter>Header Files\Filters</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
