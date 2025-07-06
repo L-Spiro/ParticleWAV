@@ -846,7 +846,7 @@ namespace pw {
 		 * \returns Mean squared error.
 		 */
 		template <typename _tType = std::vector<double>>
-		double												GradeSimilarity( const _tType &_vA, const _tType &_vB ) {
+		static double										GradeSimilarity( const _tType &_vA, const _tType &_vB ) {
 			size_t sN = std::min( _vA.size(), _vB.size() );
 			double dMSE = 0.0;
 			for ( size_t I = 0; I < sN; ++I ) {

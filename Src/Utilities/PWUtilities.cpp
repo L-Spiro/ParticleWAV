@@ -11,6 +11,8 @@
 #include "../OS/PWOs.h"
 #include "../Wav/PWWavFile.h"
 
+#include <format>
+
 namespace pw {
 
 	// == Functions.
@@ -180,36 +182,78 @@ namespace pw {
 		//auto vCutOffs = FitHPFCutoffs<pw::CWavFile::lwtrack>( vSamples[0], double( wfWav.Hz() ), _sNumPoles );
 		pw::CWavFile::lwtrack vTmp;
 		std::vector<double> vHpfs;
-		std::vector<double> vRefDcs;
-		std::vector<double> vLastScores;
-		std::vector<bool> vLastDirUp;
 		std::vector<pw::CHpfFilter> vHpfFilters;
 		vHpfFilters.resize( _sNumPoles );
-		vRefDcs.resize( _sNumPoles );
-		vLastScores.resize( _sNumPoles );
-		vLastDirUp.resize( _sNumPoles );
-		size_t sStartSample = 0;
 		for ( size_t I = 0; I < _sNumPoles; ++I ) {
 			vHpfs.push_back( std::pow( 300.0, 1 - I / (_sNumPoles - 1.0) ) );
-			vHpfFilters[I].CreateHpf( vHpfs[I], float( wfWav.Hz() ) );
-			auto aDc = FindFuzzyDCCrossing( vSamples[0], sStartSample, 0.0 );
-			vRefDcs[I] = aDc.first;
-			sStartSample = aDc.second;
-			vLastDirUp[I] = true;
 		}
 
 		vTmp.resize( vSamples[0].size() );
-		for ( size_t I = 0; I < vTmp.size(); ++I ) {
-			vTmp[I] = vSamples[0][0];
-		}
-		for ( size_t I = 0; I < vTmp.size(); ++I ) {
-			double dSample = vTmp[I];
-			for ( size_t J = 0; J < vHpfFilters.size(); ++J ) {
-				dSample = vHpfFilters[J].Process( dSample );
-			}
-			vTmp[I] = dSample;
-		}
 		
+
+
+		auto ApplyHpfFilters = [&]( double _dSrc ) {
+			for ( size_t P = 0; P < _sNumPoles; ++P ) {
+				vHpfFilters[P].CreateHpf( float( vHpfs[P] ), float( wfWav.Hz() ) );
+			}
+
+			// Process every sample through the full chain of filters.
+			for ( size_t I = 0; I < vTmp.size(); ++I ) {
+				double dSample = _dSrc;
+				for ( size_t J = 0; J < vHpfFilters.size(); ++J ) {
+					dSample = vHpfFilters[J].Process( dSample );
+				}
+				vTmp[I] = dSample;
+			}
+		};
+		double dFitLimit = 0.001 / vTmp.size();
+		double dSrc = vSamples[0][0];
+		for ( size_t K = 0; K < 1000; ++K ) {
+			double dCurFit = 0.0;
+			for ( size_t P = 0; P < _sNumPoles; ++P ) {
+				ApplyHpfFilters( dSrc );
+
+				dCurFit = GradeSimilarity( vTmp, vSamples[0] );
+				//double dLastFit = 0.0;
+				double dStep = 1.1;
+				while ( dCurFit >= dFitLimit ) {
+					double dPrev = vHpfs[P];
+					vHpfs[P] += dStep;
+					if PW_UNLIKELY( vHpfs[P] == dPrev ) { break; }
+
+					ApplyHpfFilters( dSrc );
+
+					double dNewFit = std::sqrt( GradeSimilarity( vTmp, vSamples[0] ) );
+					if PW_UNLIKELY( dNewFit >= dCurFit ) {
+						// Things got worse.
+						dStep = dStep * -0.98;
+						if PW_UNLIKELY( std::abs( dStep ) < FLT_EPSILON ) { break; }
+					}
+					dCurFit = dNewFit;
+				}
+			}
+			if PW_UNLIKELY( K % 10 == 0 ) {
+				for ( size_t P = 0; P < _sNumPoles; ++P ) {
+					auto sPrintMe = std::format( "{}: {:.17g}\r\n", K / 10, vHpfs[P] );
+					std::cout << sPrintMe.c_str();
+#ifdef _WIN32
+					::OutputDebugStringA( sPrintMe.c_str() );
+#endif	// #ifdef _WIN32
+				}
+				std::cout << std::endl;
+#ifdef _WIN32
+				::OutputDebugStringA( std::format( "Fit: {}\r\n\r\n", dCurFit ).c_str() );
+#endif	// #ifdef _WIN32
+			}
+		}
+		for ( size_t P = 0; P < _sNumPoles; ++P ) {
+			auto sPrintMe = std::format( "{:.17g}\r\n", vHpfs[P] );
+			std::cout << sPrintMe.c_str();
+#ifdef _WIN32
+			::OutputDebugStringA( sPrintMe.c_str() );
+#endif	// #ifdef _WIN32
+		}
+
 		return true;
 	}
 
