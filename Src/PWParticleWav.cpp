@@ -128,7 +128,7 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
 			// =================================
 			// ANALYSIS
 			// =================================
-			if ( PW_CHECK( 5, anlz_freq_resp_hpf ) ) {
+			if ( PW_CHECK( 5, anlz_hpf ) ) {
 				// File Name
 				// Number of HPS's.
 				// Start Sample.
