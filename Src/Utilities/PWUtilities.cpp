@@ -12,6 +12,7 @@
 #include "../Wav/PWWavFile.h"
 
 #include <format>
+#include <map>
 
 namespace pw {
 
@@ -248,6 +249,119 @@ namespace pw {
 		}
 		for ( size_t P = 0; P < _sNumPoles; ++P ) {
 			auto sPrintMe = std::format( "{:.17g}\r\n", vHpfs[P] );
+			std::cout << sPrintMe.c_str();
+#ifdef _WIN32
+			::OutputDebugStringA( sPrintMe.c_str() );
+#endif	// #ifdef _WIN32
+		}
+
+		return true;
+	}
+
+	/**
+	 * Prints the levels of found square-wav rising and falling edges.
+	 * 
+	 * \param _pwcPath The WAV file to load.
+	 * \param _dThresh The threshold for differentiating between noise and square-wave edges.
+	 * \param _ui32Start The starting sample from the file to analyze.
+	 * \param _ui64Total The number of samples to analyze.
+	 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
+	 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+	 **/
+	bool CUtilities::FindSquareVolumes( const char16_t * _pwcPath, double _dThresh, uint32_t _ui32Start, uint32_t _ui32Total ) {
+		pw::CWavFile wfWav;
+		if ( !wfWav.Open( _pwcPath, pw::CWavFile::PW_LF_DATA, _ui32Start, _ui32Start + _ui32Total ) ) { return false; }
+
+		pw::CWavFile::lwaudio vSamples;
+		vSamples.resize( wfWav.Channels() );
+		if ( !wfWav.GetAllSamples( vSamples ) ) {
+			throw std::runtime_error( "Failed to gather WAV-file samples." );
+		}
+		if ( !vSamples.size() ) { return false; }
+
+		std::vector<double> vEdges;
+		size_t sIdx = 0;
+		double dSum = 0.0;
+		while ( sIdx < vSamples[0].size() ) {
+			double dVal;
+			sIdx = FindNextEdge( vSamples[0], sIdx, _dThresh, dVal );
+			if ( sIdx == vSamples[0].size() ) { break; }
+			vEdges.push_back( dVal );
+			dSum += dVal;
+		}
+
+		double dAverage = dSum / double( vEdges.size() );
+
+
+		auto sPrintMe = std::format( "Average: {:.17g} ({} Peaks)\r\n", dAverage, vEdges.size() );
+		std::cout << sPrintMe.c_str();
+#ifdef _WIN32
+		::OutputDebugStringA( sPrintMe.c_str() );
+#endif	// #ifdef _WIN32
+
+		return true;
+	}
+
+	/**
+	 * Analyses a change in volume relative to an absolute volume (found in _pwcPath1).
+	 * 
+	 * \param _pwcPath1 The first WAV file to load.
+	 * \param _ui32Start1 The starting sample from the first file to analyze.
+	 * \param _ui32Total1 The number of samples to analyze.
+	 * \param _pwcPath2 The second WAV file to load.
+	 * \param _ui32Start2 The starting sample from the second file to analyze.
+	 * \return Returns true if the files have been loaded and analyzed.  False indicates a missing or unloadable file.
+	 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+	 **/
+	bool CUtilities::FindDiffInVolumeByVolume( const char16_t * _pwcPath1, uint32_t _ui32Start1, uint32_t _ui32Total1, const char16_t * _pwcPath2, uint32_t _ui32Start2 ) {
+		pw::CWavFile wfWav1;
+		if ( !wfWav1.Open( _pwcPath1, pw::CWavFile::PW_LF_DATA, _ui32Start1, _ui32Start1 + _ui32Total1 ) ) { return false; }
+
+		pw::CWavFile::lwaudio vSamples1;
+		vSamples1.resize( wfWav1.Channels() );
+		if ( !wfWav1.GetAllSamples( vSamples1 ) ) {
+			throw std::runtime_error( "Failed to gather first WAV-file samples." );
+		}
+		if ( !vSamples1.size() ) { return false; }
+
+
+		pw::CWavFile wfWav2;
+		if ( !wfWav2.Open( _pwcPath2, pw::CWavFile::PW_LF_DATA, _ui32Start2, _ui32Start2 + _ui32Total1 ) ) { return false; }
+
+		pw::CWavFile::lwaudio vSamples2;
+		vSamples2.resize( wfWav2.Channels() );
+		if ( !wfWav2.GetAllSamples( vSamples2 ) ) {
+			throw std::runtime_error( "Failed to gather second WAV-file samples." );
+		}
+		if ( !vSamples2.size() ) { return false; }
+
+		if ( wfWav1.Hz() != wfWav2.Hz() ) { throw std::runtime_error( "Files must have the same Hz." ); }
+		if ( vSamples1[0].size() != vSamples2[0].size() ) { throw std::runtime_error( "Unable to buffer all necessary samples from one of the files." ); }
+
+		std::map<double, std::vector<double>> mVolumes;
+		for ( size_t I = 0; I < vSamples1[0].size(); ++I ) {
+			double dRefVol = vSamples1[0][I];
+			double dScaledVol = vSamples2[0][I];
+			auto itVol = mVolumes.find( dRefVol );
+			if ( itVol == mVolumes.end() ) {
+				mVolumes.emplace( dRefVol, std::vector<double>( 1, dScaledVol ) );
+			}
+			else {
+				itVol->second.push_back( dScaledVol );
+			}
+		}
+
+		std::map<double, double> mAveraged;
+		// Iterate over each entry and average the adjusted volumes.
+		for ( auto I = mVolumes.begin(); I != mVolumes.end(); ++I ) {
+			double dSum = 0.0;
+			for ( auto J = I->second.size(); J--; ) {
+				dSum += I->second[J];
+			}
+			dSum /= double( I->second.size() );
+			mAveraged.emplace( I->first, dSum );
+
+			auto sPrintMe = std::format( "Vol: {:.17g}, {:.17g}\r\n", I->first, dSum );
 			std::cout << sPrintMe.c_str();
 #ifdef _WIN32
 			::OutputDebugStringA( sPrintMe.c_str() );

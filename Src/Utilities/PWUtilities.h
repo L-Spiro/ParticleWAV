@@ -897,6 +897,80 @@ namespace pw {
 		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
 		 **/
 		static bool											SolveForHpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total );
+
+		/**
+		 * Starts at a given sample index and finds the size and position of the next peak.
+		 * 
+		 * \param _vSamples Waveform samples.
+		 * \param _sStart The sample at which to start the search.
+		 * \param _dSize Holds the returned size of the peak.
+		 * \return Returns the index where the next peak ends.
+		 **/
+		template <typename _tType = std::vector<double>>
+		static size_t										GetPeak( const _tType &_vSamples, size_t _sStart, double &_dSize ) {
+			if ( _vSamples.size() - _sStart < 2 ) { return _vSamples.size(); }
+			size_t sIdx = _sStart + 1;
+			double dDiff = _vSamples[sIdx] - _vSamples[sIdx-1];
+			
+			size_t J = sIdx + 1;
+			while ( J < _vSamples.size() ) {
+				double dTmpDiff = _vSamples[J] - _vSamples[J-1];
+				if ( (dTmpDiff > 0.0 && dDiff > 0.0) ||
+					(dTmpDiff < 0.0 && dDiff < 0.0) ) {
+					dDiff += dTmpDiff;
+					++sIdx;
+					++J;
+				}
+				else { break; }
+			}
+			_dSize = std::abs( dDiff );
+			return sIdx;
+		}
+
+		/**
+		 * Finds a rising or falling edge of at least the given magnitude from the starting point.  Returns the sample of the found sample and the given sample.
+		 * 
+		 * \param _vSamples Waveform samples.
+		 * \param _sStart The sample at which to start the search.
+		 * \param _dThresh The threshold for considering a ris or fall part of a square wave.
+		 * \param _dFoundValue The returned value unless _vSamples.size() is returned.
+		 * \return Returns the index of the found edge or _vSamples.size().
+		 **/
+		template <typename _tType = std::vector<double>>
+		static size_t										FindNextEdge( const _tType &_vSamples, size_t _sStart, double _dThresh, double &_dFoundValue ) {
+			if ( _vSamples.size() - _sStart < 2 ) { return _vSamples.size(); }
+
+			for ( auto I = _sStart; I < _vSamples.size(); ++I ) {
+				I = GetPeak( _vSamples, I, _dFoundValue );
+				if ( _dFoundValue >= _dThresh ) { return I; }
+			}
+			return _vSamples.size();
+		}
+
+		/**
+		 * Prints the levels of found square-wav rising and falling edges.
+		 * 
+		 * \param _pwcPath The WAV file to load.
+		 * \param _dThresh The threshold for differentiating between noise and square-wave edges.
+		 * \param _ui32Start The starting sample from the file to analyze.
+		 * \param _ui64Total The number of samples to analyze.
+		 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
+		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+		 **/
+		static bool											FindSquareVolumes( const char16_t * _pwcPath, double _dThresh, uint32_t _ui32Start, uint32_t _ui32Total );
+
+		/**
+		 * Analyses a change in volume relative to an absolute volume (found in _pwcPath1).
+		 * 
+		 * \param _pwcPath1 The first WAV file to load.
+		 * \param _ui32Start1 The starting sample from the first file to analyze.
+		 * \param _ui32Total1 The number of samples to analyze.
+		 * \param _pwcPath2 The second WAV file to load.
+		 * \param _ui32Start2 The starting sample from the second file to analyze.
+		 * \return Returns true if the files have been loaded and analyzed.  False indicates a missing or unloadable file.
+		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+		 **/
+		static bool											FindDiffInVolumeByVolume( const char16_t * _pwcPath1, uint32_t _ui32Start1, uint32_t _ui32Total1, const char16_t * _pwcPath2, uint32_t _ui32Start2 );
 	};
 
 }	// namespace pw

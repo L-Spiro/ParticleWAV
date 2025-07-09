@@ -130,7 +130,7 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
 			// =================================
 			if ( PW_CHECK( 5, anlz_hpf ) ) {
 				// File Name
-				// Number of HPS's.
+				// Number of HPF's.
 				// Start Sample.
 				// Total Samples.
                 try {
@@ -143,6 +143,38 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
                 catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
                 PW_ADV( 5 );
             }
+			if ( PW_CHECK( 5, anlz_sqr_vol ) ) {
+				// File Name
+				// Noise Threashold.
+				// Start Sample.
+				// Total Samples.
+                try {
+                    auto pu16File = reinterpret_cast<const char16_t *>((_wcpArgV[1]));
+					double dThresh = ::_wtof( _wcpArgV[2] );
+					uint32_t ui32Start = uint32_t( ::_wtoll( _wcpArgV[3] ) );
+					uint32_t ui32Total = uint32_t( ::_wtoll( _wcpArgV[4] ) );
+					auto bRet = pw::CUtilities::FindSquareVolumes( pu16File, dThresh, ui32Start, ui32Total );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( 5 );
+            }
+			if ( PW_CHECK( 6, anlz_dynamic_vol ) ) {
+				// File Name 1
+				// Start Sample 1.
+				// Total Samples 1.
+				// File Name 2
+				// Start Sample 2.
+				try {
+                    auto pu16File1 = reinterpret_cast<const char16_t *>((_wcpArgV[1]));
+					uint32_t ui32Start1 = uint32_t( ::_wtoll( _wcpArgV[2] ) );
+					uint32_t ui32Total1 = uint32_t( ::_wtoll( _wcpArgV[3] ) );
+					auto pu16File2 = reinterpret_cast<const char16_t *>((_wcpArgV[4]));
+					uint32_t ui32Start2 = uint32_t( ::_wtoll( _wcpArgV[5] ) );
+					auto bRet = pw::CUtilities::FindDiffInVolumeByVolume( pu16File1, ui32Start1, ui32Total1, pu16File2, ui32Start2 );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( 6 );
+			}
         }
         else {
             PW_ERRORT( std::format( L"Invalid command: \"{}\".",

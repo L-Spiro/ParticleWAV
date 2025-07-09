@@ -1178,7 +1178,7 @@ namespace pw {
 		template <typename _tType = lwaudio>
 		static bool														BatchF64ToPcm16_Dither( const _tType &_vSrc, std::vector<uint8_t> &_vDst ) {
 			try {
-				const double dFactor = std::pow( 2.0, 16.0 - 1.0 ) - 1.0;
+				//const double dFactor = std::pow( 2.0, 16.0 - 1.0 ) - 1.0;
 				auto stNumSamples = _vSrc[0].size();
 				auto stNumChannels = _vSrc.size();
 				auto aSize = _vDst.size();
