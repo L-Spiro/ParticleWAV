@@ -263,19 +263,20 @@ namespace pw {
 	 * Loads a given region of a given WAV file and analyzes for the given number of LPF's, taking into account a given set of HPF's already
 	 *	known to be in the signal path.  Call within try/catch.
 	 *
-	 * The region should start at a step (a square-wave edge).  The HPF's are applied to the internal model after the LPF's so that it matches
-	 *	the recording.  The level before the step and the step size are fitted along with the LPF cut-offs.  LPF cut-offs are -3 dB frequencies
-	 *	in Hz; HPF cut-offs use the same units as SolveForHpfs().
+	 * The region should start a few samples before a step (a square-wave edge).  The HPF's are applied to the internal model after the LPF's so
+	 *	that it matches the recording.  The step time (to a fraction of a sample), the level before the step, a linear drift, and the step size
+	 *	are fitted along with the LPF cut-offs.  LPF cut-offs are in CLpfFilter units; HPF cut-offs use the same units as SolveForHpfs().
 	 *
 	 * \param _pwcPath The WAV file to load.
 	 * \param _sNumPoles The number of LPF influences to find.
 	 * \param _ui32Start The starting sample from the file to analyze.
 	 * \param _ui32Total The number of samples to analyze.
 	 * \param _vHpfs The cut-offs of the HPF's known to be in the signal path (as found by SolveForHpfs()).  May be empty.
+	 * \param _dFilterHz The rate at which the filters run (for example the NES CPU rate).  0 means the WAV file's rate.
 	 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
 	 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
 	 **/
-	bool CUtilities::SolveForLpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total, const std::vector<double> &_vHpfs ) {
+	bool CUtilities::SolveForLpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total, const std::vector<double> &_vHpfs, double _dFilterHz ) {
 		pw::CWavFile wfWav;
 		if ( !wfWav.Open( _pwcPath, pw::CWavFile::PW_LF_DATA, _ui32Start, _ui32Start + _ui32Total ) ) { return false; }
 
@@ -286,16 +287,22 @@ namespace pw {
 		}
 		if ( !vSamples.size() || vSamples[0].size() < 2 ) { return false; }
 
-		auto lfFit = FitLpfs( vSamples[0], double( wfWav.Hz() ), _sNumPoles, _vHpfs, true );
+		auto lfFit = FitLpfs( vSamples[0], double( wfWav.Hz() ), _sNumPoles, _vHpfs, _dFilterHz, true );
 
+		auto sRate = std::format( "Filter Rate: {:.15f} Hz\r\n", (_dFilterHz > 0.0) ? _dFilterHz : double( wfWav.Hz() ) );
+		std::cout << sRate.c_str();
+#ifdef _WIN32
+		::OutputDebugStringA( sRate.c_str() );
+#endif	// #ifdef _WIN32
 		for ( size_t P = 0; P < _sNumPoles; ++P ) {
-			auto sPrintMe = std::format( "{:.17g}\r\n", lfFit.vCutOffs[P] );
+			auto sPrintMe = std::format( "{:.15f}\r\n", lfFit.vCutOffs[P] );
 			std::cout << sPrintMe.c_str();
 #ifdef _WIN32
 			::OutputDebugStringA( sPrintMe.c_str() );
 #endif	// #ifdef _WIN32
 		}
-		auto sLevels = std::format( "Start Level: {:.17g}\r\nStep Size: {:.17g}\r\nFit (MSE): {:.17g}\r\n", lfFit.dOffset, lfFit.dStepSize, lfFit.dFit );
+		auto sLevels = std::format( "Step Time: {:.15f} samples after sample {}\r\nStart Level: {:.17g}\r\nDrift: {:.17g}\r\nStep Size: {:.17g}\r\nFit (MSE): {:.17g}\r\n",
+			lfFit.dStepTime, _ui32Start, lfFit.dOffset, lfFit.dDrift, lfFit.dStepSize, lfFit.dFit );
 		std::cout << sLevels.c_str();
 #ifdef _WIN32
 		::OutputDebugStringA( sLevels.c_str() );

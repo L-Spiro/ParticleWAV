@@ -152,10 +152,17 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
 				// HPF 0.
 				// HPF 1.
 				// ...
+				// [Optional] Filter Rate (the rate at which the filters run, IE the NES CPU rate).  Omitted = the WAV file's rate.
 				size_t sTotalHpfs = size_t( ::_wtoi( _wcpArgV[5] ) );
 				if ( size_t( _iArgC ) < 6 + sTotalHpfs ) {
 					PW_ERRORT( std::format( L"\"anlz_lpf\" expects {} HPF frequencies but only {} arguments remain.",
 						sTotalHpfs, _iArgC - 6 ).c_str(), PW_E_INVALIDCALL );
+				}
+				size_t sUsed = 6 + sTotalHpfs;
+				double dFilterHz = 0.0;
+				if ( size_t( _iArgC ) > sUsed && _wcpArgV[sUsed][0] != L'-' ) {
+					dFilterHz = ::_wtof( _wcpArgV[sUsed] );
+					++sUsed;
 				}
                 try {
                     auto pu16File = reinterpret_cast<const char16_t *>((_wcpArgV[1]));
@@ -166,10 +173,10 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
 					for ( size_t I = 0; I < sTotalHpfs; ++I ) {
 						vHpfs.push_back( ::_wtof( _wcpArgV[6+I] ) );
 					}
-					auto bRet = pw::CUtilities::SolveForLpfs( pu16File, sTotalLpfs, ui32Start, ui32Total, vHpfs );
+					auto bRet = pw::CUtilities::SolveForLpfs( pu16File, sTotalLpfs, ui32Start, ui32Total, vHpfs, dFilterHz );
                 }
                 catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
-                PW_ADV( int( 6 + sTotalHpfs ) );
+                PW_ADV( int( sUsed ) );
             }
 			if ( PW_CHECK( 5, anlz_sqr_vol ) ) {
 				// File Name
