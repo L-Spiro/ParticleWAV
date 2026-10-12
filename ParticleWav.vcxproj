@@ -172,6 +172,7 @@
     <ClInclude Include="Src\Files\PWStdFile.h" />
     <ClInclude Include="Src\Filters\PWAudioFilterBase.h" />
     <ClInclude Include="Src\Filters\PWHpfFilter.h" />
+    <ClInclude Include="Src\Filters\PWLpfFilter.h" />
     <ClInclude Include="Src\OS\PWApple.h" />
     <ClInclude Include="Src\OS\PWFeatureSet.h" />
     <ClInclude Include="Src\OS\PWOs.h" />

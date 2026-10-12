@@ -11,10 +11,15 @@
 
 #include "../OS/PWOs.h"
 #include "../OS/PWFeatureSet.h"
+#include "../Filters/PWHpfFilter.h"
+#include "../Filters/PWLpfFilter.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
+#include <format>
+#include <iostream>
 //#include <intrin.h>
 #include <numbers>
 #include <stdexcept>
@@ -45,6 +50,16 @@ namespace pw {
 	 */
 	class CUtilities {
 	public :
+		// == Types.
+		/** The result of fitting a chain of LPF's to a step response. */
+		struct PW_LPF_FIT {
+			std::vector<double>								vCutOffs;											/**< The fitted -3 dB cut-off frequencies in Hz, sorted from lowest to highest. */
+			double											dOffset = 0.0;										/**< The fitted level before the step (a constant added after all filters). */
+			double											dStepSize = 0.0;									/**< The fitted size of the step (before filtering). */
+			double											dFit = 0.0;											/**< The final mean-squared error between the model and the samples. */
+		};
+
+
 		// == Functions.
 		/**
 		 * Creates a string with _cReplaceMe replaced with _cWithMe inside _s16String.
@@ -897,6 +912,172 @@ namespace pw {
 		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
 		 **/
 		static bool											SolveForHpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total );
+
+		/**
+		 * Fits a chain of single-pole LPF's to a recorded step response that also passed through a known chain of HPF's.  The step is assumed to
+		 *	occur just before the first sample: every filter starts from rest and is fed a constant step, the known HPF's are applied after the
+		 *	LPF's, and a constant offset is added to the result.  The LPF cut-offs are searched; the step size and offset are solved exactly.
+		 *
+		 * \param _vSamples The recorded step response.
+		 * \param _dHz The sample rate of _vSamples.
+		 * \param _sNumPoles The number of LPF influences to find.
+		 * \param _vHpfs The cut-offs of the HPF's known to be in the signal path, in the same units as CHpfFilter::CreateHpf() (and SolveForHpfs()).  May be empty.
+		 * \param _bPrintProgress If true, intermediate results are printed every 10 iterations.
+		 * \return Returns the fitted cut-offs (sorted from lowest to highest), offset, step size, and final mean-squared error.
+		 * \throws std::runtime_error if _sNumPoles is 0 or there are fewer than 2 samples, std::bad_alloc on memory failure.
+		 **/
+		template <typename _tType = std::vector<double>>
+		static PW_LPF_FIT									FitLpfs( const _tType &_vSamples, double _dHz, size_t _sNumPoles, const std::vector<double> &_vHpfs, bool _bPrintProgress = false ) {
+			if PW_UNLIKELY( !_sNumPoles ) { throw std::runtime_error( "At least 1 LPF must be requested." ); }
+			if PW_UNLIKELY( _vSamples.size() < 2 ) { throw std::runtime_error( "At least 2 samples are required to fit LPF's." ); }
+
+			const size_t sTotal = _vSamples.size();
+			const double dNyquist = _dHz * 0.5;
+			const double dMinFc = 0.01;
+
+			// The model is Offset + Step * G[n], where G is the unit-step response of the LPF's followed by the HPF's.  For any set of cut-offs the
+			//	best Offset and Step are found exactly by linear least squares, so only the cut-offs need to be searched.
+			std::vector<CLpfFilter> vLpfFilters( _sNumPoles );
+			std::vector<CHpfFilter> vHpfFilters( _vHpfs.size() );
+			std::vector<double> vResponse( sTotal );
+			double dSampleMean = 0.0;
+			for ( size_t I = 0; I < sTotal; ++I ) { dSampleMean += _vSamples[I]; }
+			dSampleMean /= double( sTotal );
+			double dOffset = dSampleMean, dStepSize = 0.0;
+
+			auto ApplyFilters = [&]( const std::vector<double> &_vCutOffs ) {
+				for ( size_t P = 0; P < _sNumPoles; ++P ) {
+					vLpfFilters[P].CreateLpf( float( _vCutOffs[P] ), float( _dHz ) );
+				}
+				for ( size_t P = 0; P < vHpfFilters.size(); ++P ) {
+					vHpfFilters[P].CreateHpf( float( _vHpfs[P] ), float( _dHz ) );
+				}
+
+				// Process a unit step through the full chain of filters: LPF's, then the known HPF's.
+				double dResponseMean = 0.0;
+				for ( size_t I = 0; I < sTotal; ++I ) {
+					double dSample = 1.0;
+					for ( size_t J = 0; J < _sNumPoles; ++J ) {
+						dSample = vLpfFilters[J].Process( dSample );
+					}
+					for ( size_t J = 0; J < vHpfFilters.size(); ++J ) {
+						dSample = vHpfFilters[J].Process( dSample );
+					}
+					vResponse[I] = dSample;
+					dResponseMean += dSample;
+				}
+				dResponseMean /= double( sTotal );
+
+				// Solve for the offset and step size.
+				double dCov = 0.0, dVar = 0.0;
+				for ( size_t I = 0; I < sTotal; ++I ) {
+					double dG = vResponse[I] - dResponseMean;
+					dCov += dG * (_vSamples[I] - dSampleMean);
+					dVar += dG * dG;
+				}
+				dStepSize = (dVar > 0.0) ? (dCov / dVar) : 0.0;
+				dOffset = dSampleMean - dStepSize * dResponseMean;
+
+				double dMse = 0.0;
+				for ( size_t I = 0; I < sTotal; ++I ) {
+					double dErr = _vSamples[I] - (dOffset + dStepSize * vResponse[I]);
+					dMse += dErr * dErr;
+				}
+				return dMse / double( sTotal );
+			};
+
+			// Initial guess: scan all poles together over a logarithmic grid from 1 Hz to Nyquist and keep the best.
+			std::vector<double> vCutOffs( _sNumPoles );
+			double dBestFreq = dNyquist;
+			double dBestFit = DBL_MAX;
+			const size_t sScanSteps = 64;
+			for ( size_t I = 0; I <= sScanSteps; ++I ) {
+				double dFreq = std::pow( dNyquist, I / double( sScanSteps ) );
+				std::fill( vCutOffs.begin(), vCutOffs.end(), dFreq );
+				double dThisFit = ApplyFilters( vCutOffs );
+				if ( dThisFit < dBestFit ) {
+					dBestFit = dThisFit;
+					dBestFreq = dFreq;
+				}
+			}
+			for ( size_t I = 0; I < _sNumPoles; ++I ) {
+				// Spread the poles over 1 octave around the best scanned frequency so they are free to separate.
+				double dFrac = (_sNumPoles > 1) ? (I / (_sNumPoles - 1.0)) : 0.5;
+				vCutOffs[I] = std::clamp( dBestFreq * std::pow( 2.0, dFrac - 0.5 ), dMinFc, dNyquist );
+			}
+
+			// Stop when the RMS error falls below a billionth of the sample range; otherwise run until a full pass stops improving.
+			auto aMinMax = std::minmax_element( _vSamples.begin(), _vSamples.end() );
+			const double dLevelScale = std::max( (*aMinMax.second) - (*aMinMax.first), 1.0e-9 );
+			const double dFitLimit = (dLevelScale * 1.0e-9) * (dLevelScale * 1.0e-9);
+			double dCurFit = ApplyFilters( vCutOffs );
+			for ( size_t K = 0; K < 1000 && dCurFit >= dFitLimit; ++K ) {
+				const double dIterStartFit = dCurFit;
+				for ( size_t P = 0; P < _sNumPoles && dCurFit >= dFitLimit; ++P ) {
+					// Pattern search on one cut-off: grow the step while it helps, reverse and halve it when it does not.
+					double dStep = vCutOffs[P] * 0.01;
+					const double dMinStep = std::abs( dStep ) * 1.0e-6;
+					while ( std::abs( dStep ) >= dMinStep && dCurFit >= dFitLimit ) {
+						const double dPrev = vCutOffs[P];
+						const double dNext = std::clamp( dPrev + dStep, dMinFc, dNyquist );
+						double dNewFit = dCurFit;
+						if PW_LIKELY( dNext != dPrev ) {
+							vCutOffs[P] = dNext;
+							dNewFit = ApplyFilters( vCutOffs );
+						}
+						if ( dNewFit < dCurFit ) {
+							dCurFit = dNewFit;
+							dStep *= 1.25;
+						}
+						else {
+							// Things got worse (or did not change).  Go back and try the other way with a smaller step.
+							vCutOffs[P] = dPrev;
+							dStep *= -0.5;
+						}
+					}
+				}
+				dCurFit = ApplyFilters( vCutOffs );	// Re-sync the offset and step size with the accepted cut-offs.
+
+				if ( _bPrintProgress && (K % 10 == 0) ) {
+					for ( size_t P = 0; P < _sNumPoles; ++P ) {
+						auto sPrintMe = std::format( "{}: {:.17g}\r\n", K / 10, vCutOffs[P] );
+						std::cout << sPrintMe.c_str();
+#ifdef _WIN32
+						::OutputDebugStringA( sPrintMe.c_str() );
+#endif	// #ifdef _WIN32
+					}
+					std::cout << std::endl;
+#ifdef _WIN32
+					::OutputDebugStringA( std::format( "Fit: {}\r\n\r\n", dCurFit ).c_str() );
+#endif	// #ifdef _WIN32
+				}
+
+				// Stop once a full pass no longer improves anything.
+				if ( dIterStartFit - dCurFit <= dIterStartFit * 1.0e-12 ) { break; }
+			}
+
+			PW_LPF_FIT lfRet;
+			lfRet.vCutOffs = vCutOffs;
+			std::sort( lfRet.vCutOffs.begin(), lfRet.vCutOffs.end() );
+			lfRet.dOffset = dOffset;
+			lfRet.dStepSize = dStepSize;
+			lfRet.dFit = dCurFit;
+			return lfRet;
+		}
+
+		/**
+		 * Loads a given region of a given WAV file and analyzes for the given number of LPF’s, taking into account a given set of HPF’s already
+		 *	known to be in the signal path.  Call within try/catch.
+		 *
+		 * \param _pwcPath The WAV file to load.
+		 * \param _sNumPoles The number of LPF influences to find.
+		 * \param _ui32Start The starting sample from the file to analyze.
+		 * \param _ui32Total The number of samples to analyze.
+		 * \param _vHpfs The cut-offs of the HPF’s known to be in the signal path (as found by SolveForHpfs()).  May be empty.
+		 * \return Returns true if the file was loaded and analyzed.  False indicates a missing or unloadable file.
+		 * \throws std::runtime_error in cases of solver failures, std::bad_alloc on memory failure.
+		 **/
+		static bool											SolveForLpfs( const char16_t * _pwcPath, size_t _sNumPoles, uint32_t _ui32Start, uint32_t _ui32Total, const std::vector<double> &_vHpfs );
 
 		/**
 		 * Starts at a given sample index and finds the size and position of the next peak.

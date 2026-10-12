@@ -143,6 +143,34 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
                 catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
                 PW_ADV( 5 );
             }
+			if ( PW_CHECK( 6, anlz_lpf ) ) {
+				// File Name
+				// Number of LPF's.
+				// Start Sample.
+				// Total Samples.
+				// Number of HPF's.
+				// HPF 0.
+				// HPF 1.
+				// ...
+				size_t sTotalHpfs = size_t( ::_wtoi( _wcpArgV[5] ) );
+				if ( size_t( _iArgC ) < 6 + sTotalHpfs ) {
+					PW_ERRORT( std::format( L"\"anlz_lpf\" expects {} HPF frequencies but only {} arguments remain.",
+						sTotalHpfs, _iArgC - 6 ).c_str(), PW_E_INVALIDCALL );
+				}
+                try {
+                    auto pu16File = reinterpret_cast<const char16_t *>((_wcpArgV[1]));
+					size_t sTotalLpfs = ::_wtoi( _wcpArgV[2] );
+					uint32_t ui32Start = uint32_t( ::_wtoll( _wcpArgV[3] ) );
+					uint32_t ui32Total = uint32_t( ::_wtoll( _wcpArgV[4] ) );
+					std::vector<double> vHpfs;
+					for ( size_t I = 0; I < sTotalHpfs; ++I ) {
+						vHpfs.push_back( ::_wtof( _wcpArgV[6+I] ) );
+					}
+					auto bRet = pw::CUtilities::SolveForLpfs( pu16File, sTotalLpfs, ui32Start, ui32Total, vHpfs );
+                }
+                catch ( ... ) { PW_ERROR( PW_E_OUTOFMEMORY ); }
+                PW_ADV( int( 6 + sTotalHpfs ) );
+            }
 			if ( PW_CHECK( 5, anlz_sqr_vol ) ) {
 				// File Name
 				// Noise Threashold.

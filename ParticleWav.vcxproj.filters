@@ -109,6 +109,9 @@
     <ClInclude Include="Src\Filters\PWHpfFilter.h">
       <Filter>Header Files\Filters</Filter>
     </ClInclude>
+    <ClInclude Include="Src\Filters\PWLpfFilter.h">
+      <Filter>Header Files\Filters</Filter>
+    </ClInclude>
     <ClInclude Include="Src\Filters\PWAudioFilterBase.h">
       <Filter>Header Files\Filters</Filter>
     </ClInclude>
