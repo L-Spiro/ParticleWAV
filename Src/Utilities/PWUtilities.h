@@ -16,8 +16,10 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <iostream>
 //#include <intrin.h>
@@ -648,6 +650,24 @@ namespace pw {
 		}
 		
 		/**
+		 * Converts a sample to an integer: scales it, rounds half away from zero (exactly as std::round()), then clamps to the given integer range.
+		 *	NaN converts to 0.  Clamping happens in the integer domain, not to [-1,1], so a value read from a file (for example -32768 / 32767.0)
+		 *	is written back unchanged, while generated audio clamped to [-1,1] still never produces the asymmetric minimum (for example -32768).
+		 *	This is the reference conversion; every SIMD path must match it bit-for-bit.
+		 *
+		 * \param _dSample The sample to convert.
+		 * \param _dScale The value by which to scale the sample (32767.0 for 16-bit PCM, etc.)
+		 * \param _i32Min The smallest allowed result.
+		 * \param _i32Max The largest allowed result.
+		 * \return Returns the converted sample.
+		 **/
+		static inline int32_t								SampleToInt( double _dSample, double _dScale, int32_t _i32Min, int32_t _i32Max ) {
+			double dScaled = std::round( _dSample * _dScale );
+			if PW_UNLIKELY( !(dScaled == dScaled) ) { return 0; }
+			return static_cast<int32_t>(std::clamp( dScaled, double( _i32Min ), double( _i32Max ) ));
+		}
+
+		/**
 		 * Converts a sample from a floating-point format to a uint8_t.  8-bit PCM data is expressed as an unsigned value over the range 0 to 255, 128 being an
 		 *	audio output level of zero.
 		 *
@@ -676,8 +696,8 @@ namespace pw {
 
 		/**
 		 * Converts a sample from a floating-point format to an int16_t while applying error-diffusion dithering.  16-bit PCM data is expressed as a signed value over the
-		 *	range -32768 to 32767, 0 being an audio output level of zero.  Note that both -32768 and -32767 are -1.0; a proper
-		 *	conversion never generates -32768.
+		 *	range -32768 to 32767, 0 being an audio output level of zero.  The sample plus the running error is clamped to [-1,1] so that the error cannot grow
+		 *	without bound while the signal is clipping.
 		 * 
 		 * \param _dSample The sample to convert.
 		 * \param _dError The running error state.
@@ -685,6 +705,7 @@ namespace pw {
 		 **/
 		static inline int16_t								SampleToI16_Dither( double _dSample, double &_dError ) {
 			double dThis = _dSample + _dError;
+			if PW_UNLIKELY( !(dThis == dThis) ) { dThis = 0.0; }
 			if PW_UNLIKELY( dThis < -1.0 ) { dThis = -1.0; }
 			else if PW_UNLIKELY( dThis > 1.0 ) { dThis = 1.0; }
 		
@@ -711,149 +732,199 @@ namespace pw {
 			return static_cast<int32_t>(std::round( dScaledSample ));
 		}
 
+		/**
+		 * Converts a sample from a floating-point format to an int32_t.  32-bit PCM data is expressed as a signed value over the
+		 *	range -2147483648 to 2147483647, 0 being an audio output level of zero.  -1.0 maps to -2147483647; only values below -1.0 map to -2147483648.
+		 *
+		 * \param _dSample The sample to convert.
+		 * \return Returns the converted sample.
+		 **/
+		static inline int32_t								SampleToI32( double _dSample ) {
+			return SampleToInt( _dSample, 2147483647.0, INT32_MIN, INT32_MAX );
+		}
+
 #ifdef __AVX2__
 		/**
-		 * Converts a sample from a floating-point format to a uint8_t.  8-bit PCM data is expressed as an unsigned value over the range 0 to 255, 128 being an
-		 *	audio output level of zero.
+		 * Converts 4 doubles to int32_t exactly as SampleToInt() does (scale, round half away from zero, clamp, NaN -> 0).
+		 * 
+		 * \param _vdSamples The samples to convert.
+		 * \param _dScale The value by which to scale the samples.
+		 * \param _dMin The smallest allowed result.
+		 * \param _dMax The largest allowed result.
+		 * \return Returns the 4 converted samples.
+		 **/
+		static inline __m128i								SampleToInt_AVX2( __m256d _vdSamples, double _dScale, double _dMin, double _dMax ) {
+			const __m256d vdSignMask = _mm256_set1_pd( -0.0 );
+			__m256d vdX		= _mm256_mul_pd( _vdSamples, _mm256_set1_pd( _dScale ) );
+			__m256d vdT		= _mm256_round_pd( vdX, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC );
+			__m256d vdFrac	= _mm256_andnot_pd( vdSignMask, _mm256_sub_pd( vdX, vdT ) );										// |x - trunc( x )|, exact.
+			__m256d vdBump	= _mm256_and_pd( _mm256_cmp_pd( vdFrac, _mm256_set1_pd( 0.5 ), _CMP_GE_OQ ),
+				_mm256_or_pd( _mm256_and_pd( vdX, vdSignMask ), _mm256_set1_pd( 1.0 ) ) );									// +-1 where |frac| >= 0.5.
+			__m256d vdR		= _mm256_add_pd( vdT, vdBump );
+			vdR				= _mm256_min_pd( _mm256_max_pd( vdR, _mm256_set1_pd( _dMin ) ), _mm256_set1_pd( _dMax ) );
+			vdR				= _mm256_and_pd( vdR, _mm256_cmp_pd( vdX, vdX, _CMP_ORD_Q ) );										// NaN -> 0.
+			return _mm256_cvtpd_epi32( vdR );
+		}
+
+		/**
+		 * Converts 8 floats to 8 int32_t values (in order) exactly as SampleToInt() does.
 		 * 
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pui8Dst Pointer to the output.
-		 * \return Returns the converted sample.
+		 * \param _dScale The value by which to scale the samples.
+		 * \param _dMin The smallest allowed result.
+		 * \param _dMax The largest allowed result.
+		 * \param _viLo Holds the returned first 4 results.
+		 * \param _viHi Holds the returned last 4 results.
+		 **/
+		static inline void									SampleToInt_AVX2( const float * _pfSample, double _dScale, double _dMin, double _dMax, __m128i &_viLo, __m128i &_viHi ) {
+			__m256 vSamples	= _mm256_loadu_ps( _pfSample );
+			_viLo			= SampleToInt_AVX2( _mm256_cvtps_pd( _mm256_castps256_ps128( vSamples ) ), _dScale, _dMin, _dMax );
+			_viHi			= SampleToInt_AVX2( _mm256_cvtps_pd( _mm256_extractf128_ps( vSamples, 1 ) ), _dScale, _dMin, _dMax );
+		}
+
+		/**
+		 * Converts 8 samples from a floating-point format to uint8_t.  Bit-exact with SampleToUi8().
+		 * 
+		 * \param _pfSample Pointer to the samples to convert.
+		 * \param _pui8Dst Pointer to the output.  Exactly 8 bytes are written.
 		 **/
 		static inline void									SampleToUi8_AVX2( const float * _pfSample, uint8_t * _pui8Dst ) {
-			auto vSamples	= _mm256_loadu_ps( _pfSample );
-			auto vClamped	= _mm256_max_ps( _mm256_set1_ps( -1.0f ), _mm256_min_ps( vSamples, _mm256_set1_ps( 1.0f ) ) );
-			auto vScaled	= _mm256_mul_ps( _mm256_mul_ps( _mm256_add_ps( vClamped, _mm256_set1_ps( 1.0f ) ), _mm256_set1_ps( 0.5f ) ), _mm256_set1_ps( 255.0f ) );
-			auto vRounded	= _mm256_round_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-			// Paack into 8-bit PCM values.
-			auto vInt32Vals = _mm256_cvtps_epi32( vRounded );
-
-			auto vLo		= _mm256_castsi256_si128( vInt32Vals );				// Lower 128 bits.
-			auto vHi		= _mm256_extracti128_si256( vInt32Vals, 1 );			// Upper 128 bits.
-			auto vPacked16	= _mm_packus_epi32( vLo, vHi );
-
-			// Finally, pack the 16-bit integers into 8-bit integers.
-			auto vPacked8	= _mm_packus_epi16( vPacked16, vPacked16 );
-			_mm_storeu_epi8( _pui8Dst, vPacked8 );
+			__m128i viLo, viHi;
+			SampleToInt_AVX2( _pfSample, 127.0, -128.0, 127.0, viLo, viHi );
+			__m128i vi16	= _mm_add_epi16( _mm_packs_epi32( viLo, viHi ), _mm_set1_epi16( 128 ) );						// 0..255 as int16_t.
+			_mm_storel_epi64( reinterpret_cast<__m128i *>(_pui8Dst), _mm_packus_epi16( vi16, vi16 ) );
 		}
 
 		/**
-		 * Converts a sample from a floating-point format to an int16_t.  16-bit PCM data is expressed as a signed value over the
-		 *	range -32768 to 32767, 0 being an audio output level of zero.  Note that both -32768 and -32767 are -1.0; a proper
-		 *	conversion never generates -32768.
+		 * Converts 8 samples from a floating-point format to int16_t.  Bit-exact with SampleToI16().
 		 * 
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pi16Dst Pointer to the output.
-		 * \return Returns the converted sample.
+		 * \param _pi16Dst Pointer to the output.  Exactly 16 bytes are written.
 		 **/
 		static inline void									SampleToI16_AVX2( const float * _pfSample, int16_t * _pi16Dst ) {
-			auto vSamples	= _mm256_loadu_ps( _pfSample );
-			auto vClamped	= _mm256_max_ps( _mm256_set1_ps( -1.0f ), _mm256_min_ps( vSamples, _mm256_set1_ps( 1.0f ) ) );
-			auto vScaled	= _mm256_mul_ps( vClamped, _mm256_set1_ps( 32767.0f ) );
-			auto vRounded	= _mm256_round_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-
-			auto vInt32Vals	= _mm256_cvtps_epi32( vRounded );
-    
-			// Extract the lower and upper 128-bit lanes.
-			auto vLo		= _mm256_castsi256_si128( vInt32Vals );				// Lower 4 integers.
-			auto vHi		= _mm256_extracti128_si256( vInt32Vals, 1 );			// Upper 4 integers.
-			auto vPacked16	= _mm_packs_epi32( vLo, vHi );
-    
-			_mm_storeu_epi16( _pi16Dst, vPacked16 );
+			__m128i viLo, viHi;
+			SampleToInt_AVX2( _pfSample, 32767.0, -32768.0, 32767.0, viLo, viHi );
+			_mm_storeu_si128( reinterpret_cast<__m128i *>(_pi16Dst), _mm_packs_epi32( viLo, viHi ) );
 		}
 
 		/**
-		 * Converts a sample from a floating-point format to an int32_t.  24-bit PCM data is expressed as a signed value over the
-		 *	range -8388607 to 8388607, 0 being an audio output level of zero.  Note that both -8388608 and -8388607 are -1.0; a proper
-		 *	conversion never generates -8388608.
+		 * Converts 8 samples from a floating-point format to 24-bit values held in int32_t.  Bit-exact with SampleToI24().
 		 *
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pi32Dst Pointer to the output.  Must be aligned to a 32-byte boundary.
-		 * \return Returns the converted sample.
+		 * \param _pi32Dst Pointer to the output.  No alignment is required.
 		 **/
 		static inline void									SampleToI24_AVX2( const float * _pfSample, int32_t * _pi32Dst ) {
-			auto vSamples	= _mm256_loadu_ps( _pfSample );
-			auto vClamped	= _mm256_max_ps( _mm256_set1_ps( -1.0f ), _mm256_min_ps( vSamples, _mm256_set1_ps( 1.0f ) ) );
-			auto vScaled	= _mm256_mul_ps( vClamped, _mm256_set1_ps( 8388607.0f ) );
-			auto vRounded	= _mm256_round_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-
-			auto vInt32Vals	= _mm256_cvtps_epi32( vRounded );
-			_mm256_store_si256( reinterpret_cast<__m256i *>(_pi32Dst), vInt32Vals );
+			__m128i viLo, viHi;
+			SampleToInt_AVX2( _pfSample, 8388607.0, -8388608.0, 8388607.0, viLo, viHi );
+			_mm_storeu_si128( reinterpret_cast<__m128i *>(_pi32Dst), viLo );
+			_mm_storeu_si128( reinterpret_cast<__m128i *>(_pi32Dst + 4), viHi );
 		}
 #endif	// #ifdef __AVX2__
 
 #ifdef __AVX512F__
 		/**
-		 * Converts a sample from a floating-point format to a uint8_t.  8-bit PCM data is expressed as an unsigned value over the range 0 to 255, 128 being an
-		 *	audio output level of zero.
+		 * Converts 8 doubles to int32_t exactly as SampleToInt() does (scale, round half away from zero, clamp, NaN -> 0).  Uses only AVX-512F.
+		 * 
+		 * \param _vdSamples The samples to convert.
+		 * \param _dScale The value by which to scale the samples.
+		 * \param _dMin The smallest allowed result.
+		 * \param _dMax The largest allowed result.
+		 * \return Returns the 8 converted samples.
+		 **/
+		static inline __m256i								SampleToInt_AVX512( __m512d _vdSamples, double _dScale, double _dMin, double _dMax ) {
+			const __m512i viSignMask = _mm512_set1_epi64( INT64_MIN );
+			__m512d vdX		= _mm512_mul_pd( _vdSamples, _mm512_set1_pd( _dScale ) );
+			__m512d vdT		= _mm512_roundscale_pd( vdX, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC );
+			__m512d vdFrac	= _mm512_castsi512_pd( _mm512_andnot_si512( viSignMask, _mm512_castpd_si512( _mm512_sub_pd( vdX, vdT ) ) ) );
+			__mmask8 mBump	= _mm512_cmp_pd_mask( vdFrac, _mm512_set1_pd( 0.5 ), _CMP_GE_OQ );
+			__m512d vdOne	= _mm512_castsi512_pd( _mm512_or_si512( _mm512_and_si512( _mm512_castpd_si512( vdX ), viSignMask ),
+				_mm512_castpd_si512( _mm512_set1_pd( 1.0 ) ) ) );																	// +-1 with the sign of x.
+			__m512d vdR		= _mm512_mask_add_pd( vdT, mBump, vdT, vdOne );
+			vdR				= _mm512_min_pd( _mm512_max_pd( vdR, _mm512_set1_pd( _dMin ) ), _mm512_set1_pd( _dMax ) );
+			vdR				= _mm512_maskz_mov_pd( _mm512_cmp_pd_mask( vdX, vdX, _CMP_ORD_Q ), vdR );							// NaN -> 0.
+			return _mm512_cvtpd_epi32( vdR );
+		}
+
+		/**
+		 * Converts 16 floats to 16 int32_t values (in order) exactly as SampleToInt() does.
 		 * 
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pui8Dst Pointer to the output.
-		 * \return Returns the converted sample.
+		 * \param _dScale The value by which to scale the samples.
+		 * \param _dMin The smallest allowed result.
+		 * \param _dMax The largest allowed result.
+		 * \return Returns the 16 converted samples.
+		 **/
+		static inline __m512i								SampleToInt_AVX512( const float * _pfSample, double _dScale, double _dMin, double _dMax ) {
+			__m512 vSamples	= _mm512_loadu_ps( _pfSample );
+			__m256i viLo	= SampleToInt_AVX512( _mm512_cvtps_pd( _mm512_castps512_ps256( vSamples ) ), _dScale, _dMin, _dMax );
+			__m256i viHi	= SampleToInt_AVX512( _mm512_cvtps_pd( _mm256_castsi256_ps( _mm512_extracti64x4_epi64( _mm512_castps_si512( vSamples ), 1 ) ) ),
+				_dScale, _dMin, _dMax );
+			return _mm512_inserti64x4( _mm512_castsi256_si512( viLo ), viHi, 1 );
+		}
+
+		/**
+		 * Converts 16 samples from a floating-point format to uint8_t.  Bit-exact with SampleToUi8().
+		 * 
+		 * \param _pfSample Pointer to the samples to convert.
+		 * \param _pui8Dst Pointer to the output.  Exactly 16 bytes are written.
 		 **/
 		static inline void									SampleToUi8_AVX512( const float * _pfSample, uint8_t * _pui8Dst ) {
-			auto vSamples   = _mm512_loadu_ps( _pfSample );
-			auto vClamped   = _mm512_max_ps( _mm512_set1_ps( -1.0f ), _mm512_min_ps( vSamples, _mm512_set1_ps( 1.0f ) ) );
-			auto vScaled    = _mm512_mul_ps( _mm512_mul_ps( _mm512_add_ps( vClamped, _mm512_set1_ps( 1.0f ) ), _mm512_set1_ps( 0.5f ) ), _mm512_set1_ps( 255.0f ) );
-			auto vRounded	= _mm512_roundscale_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-			// Pack into 8-bit PCM values.
-			auto vInt32Vals = _mm512_cvtps_epi32( vRounded );
-			
-			// Extract lower and upper 256-bit lanes.
-			auto vLo256     = _mm512_castsi512_si256( vInt32Vals );					// Lower 256 bits.
-			auto vHi256     = _mm512_extracti64x4_epi64( vInt32Vals, 1 );			// Upper 256 bits.
-			auto vPacked16  = _mm256_packus_epi32( vLo256, vHi256 );				// 16-bit integers.
-			
-			// Pack the 16-bit integers into 8-bit integers.
-			auto vPacked16Lo = _mm256_castsi256_si128( vPacked16 );
-			auto vPacked16Hi = _mm256_extracti128_si256( vPacked16, 1 );
-			auto vPacked8    = _mm_packus_epi16( vPacked16Lo, vPacked16Hi );
-			_mm_storeu_si128( reinterpret_cast<__m128i *>( _pui8Dst ), vPacked8 );
+			__m512i vi32	= _mm512_add_epi32( SampleToInt_AVX512( _pfSample, 127.0, -128.0, 127.0 ), _mm512_set1_epi32( 128 ) );	// 0..255.
+			_mm_storeu_si128( reinterpret_cast<__m128i *>(_pui8Dst), _mm512_cvtusepi32_epi8( vi32 ) );
 		}
 
 		/**
-		 * Converts a sample from a floating-point format to an int16_t.  16-bit PCM data is expressed as a signed value over the
-		 *	range -32768 to 32767, 0 being an audio output level of zero.  Note that both -32768 and -32767 are -1.0; a proper
-		 *	conversion never generates -32768.
+		 * Converts 16 samples from a floating-point format to int16_t.  Bit-exact with SampleToI16().
 		 * 
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pi16Dst Pointer to the output.
-		 * \return Returns the converted sample.
+		 * \param _pi16Dst Pointer to the output.  Exactly 32 bytes are written.
 		 **/
 		static inline void									SampleToI16_AVX512( const float * _pfSample, int16_t * _pi16Dst ) {
-			auto vSamples   = _mm512_loadu_ps( _pfSample );
-			auto vClamped   = _mm512_max_ps( _mm512_set1_ps( -1.0f ), _mm512_min_ps( vSamples, _mm512_set1_ps( 1.0f ) ) );
-			auto vScaled    = _mm512_mul_ps( vClamped, _mm512_set1_ps( 32767.0f ) );
-			auto vRounded	= _mm512_roundscale_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-			
-			auto vInt32Vals = _mm512_cvtps_epi32( vRounded );
-			// Extract lower and upper 256-bit lanes.
-			auto vLo256     = _mm512_castsi512_si256( vInt32Vals );					// Lower 256 bits.
-			auto vHi256     = _mm512_extracti64x4_epi64( vInt32Vals, 1 );			// Upper 256 bits.
-			auto vPacked16  = _mm256_packs_epi32( vLo256, vHi256 );					// 16-bit integers.
-			
-			_mm256_storeu_si256( reinterpret_cast<__m256i *>( _pi16Dst ), vPacked16 );
+			__m512i vi32	= SampleToInt_AVX512( _pfSample, 32767.0, -32768.0, 32767.0 );
+			_mm256_storeu_si256( reinterpret_cast<__m256i *>(_pi16Dst), _mm512_cvtsepi32_epi16( vi32 ) );
 		}
 
 		/**
-		 * Converts a sample from a floating-point format to an int32_t.  24-bit PCM data is expressed as a signed value over the
-		 *	range -8388607 to 8388607, 0 being an audio output level of zero.  Note that both -8388608 and -8388607 are -1.0; a proper
-		 *	conversion never generates -8388608.
+		 * Converts 16 samples from a floating-point format to 24-bit values held in int32_t.  Bit-exact with SampleToI24().
 		 *
 		 * \param _pfSample Pointer to the samples to convert.
-		 * \param _pi32Dst Pointer to the output.  Must be aligned to a 64-byte boundary.
-		 * \return Returns the converted sample.
+		 * \param _pi32Dst Pointer to the output.  No alignment is required.
 		 **/
 		static inline void									SampleToI24_AVX512( const float * _pfSample, int32_t * _pi32Dst ) {
-			auto vSamples   = _mm512_loadu_ps( _pfSample );
-			auto vClamped   = _mm512_max_ps( _mm512_set1_ps( -1.0f ), _mm512_min_ps( vSamples, _mm512_set1_ps( 1.0f ) ) );
-			auto vScaled    = _mm512_mul_ps( vClamped, _mm512_set1_ps( 8388607.0f ) );
-			auto vRounded	= _mm512_roundscale_ps( vScaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC );
-			
-			auto vInt32Vals = _mm512_cvtps_epi32( vRounded );
-			_mm512_store_si512( reinterpret_cast<__m512i *>( _pi32Dst ), vInt32Vals );
+			_mm512_storeu_si512( _pi32Dst, SampleToInt_AVX512( _pfSample, 8388607.0, -8388608.0, 8388607.0 ) );
 		}
 #endif	// #ifdef __AVX512F__
+
+		/**
+		 * Converts a block of doubles to int32_t exactly as SampleToInt() does, using AVX-512 or AVX 2 when available.
+		 *
+		 * \param _pdSrc The samples to convert.
+		 * \param _stTotal The number of samples to convert.
+		 * \param _pi32Dst The output.  Must hold _stTotal values.
+		 * \param _dScale The value by which to scale the samples.
+		 * \param _i32Min The smallest allowed result.
+		 * \param _i32Max The largest allowed result.
+		 **/
+		static inline void									SamplesToInt( const double * _pdSrc, size_t _stTotal, int32_t * _pi32Dst, double _dScale, int32_t _i32Min, int32_t _i32Max ) {
+			size_t I = 0;
+#ifdef __AVX512F__
+			if ( IsAvx512FSupported() ) {
+				for ( ; I + 8 <= _stTotal; I += 8 ) {
+					_mm256_storeu_si256( reinterpret_cast<__m256i *>(_pi32Dst + I), SampleToInt_AVX512( _mm512_loadu_pd( _pdSrc + I ), _dScale, double( _i32Min ), double( _i32Max ) ) );
+				}
+			}
+#endif	// #ifdef __AVX512F__
+#ifdef __AVX2__
+			if ( IsAvx2Supported() ) {
+				for ( ; I + 4 <= _stTotal; I += 4 ) {
+					_mm_storeu_si128( reinterpret_cast<__m128i *>(_pi32Dst + I), SampleToInt_AVX2( _mm256_loadu_pd( _pdSrc + I ), _dScale, double( _i32Min ), double( _i32Max ) ) );
+				}
+			}
+#endif	// #ifdef __AVX2__
+			for ( ; I < _stTotal; ++I ) {
+				_pi32Dst[I] = SampleToInt( _pdSrc[I], _dScale, _i32Min, _i32Max );
+			}
+		}
 
 		/**
 		 * Computes the mean squared error between two waveforms.

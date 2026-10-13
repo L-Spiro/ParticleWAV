@@ -30,7 +30,9 @@ namespace pw {
 		m_uiSampleRate( 0 ),
 		m_uiBitsPerSample( 0 ),
 		m_uiBytesPerSample( 0 ),
-		m_uiBaseNote( 64 ) {
+		m_uiBaseNote( 64 ),
+		m_bHasInst( false ),
+		m_ui8Id3Version( 3 ) {
 	}
 	CWavFile::~CWavFile() {
 		StopStream();
@@ -101,13 +103,15 @@ namespace pw {
 			PW_CHUNK_ENTRY ceThis = { 0 };
 			while ( (_sbStream.Pos() - stStartOff) < cCurChunk.uiSize && _sbStream.Remaining() >= sizeof( PW_CHUNK_ENTRY ) ) {
 				ceThis.uiOffset = static_cast<uint32_t>(_sbStream.Pos());
-				if ( !_sbStream.ReadUi32( ceThis.u.uiName ) ) { return false; }
+				if ( !_sbStream.ReadUi32( ceThis.u.uiName ) ) { break; }
 				if ( ceThis.u.uiName == 0 ) { break; }
-				if ( !_sbStream.ReadUi32( ceThis.uiSize ) ) { return false; }
+				if ( !_sbStream.ReadUi32( ceThis.uiSize ) ) { break; }
 
 				ceChunks.push_back( ceThis );
 				//stOffset += ceThis.uiSize;
 				if ( ceThis.uiSize & 1 ) { ++ceThis.uiSize; }
+				// A chunk that runs past the end of the file (a truncated file) is the last one; never seek beyond the end.
+				if ( ceThis.uiSize >= _sbStream.Remaining() ) { break; }
 				_sbStream.MovePointerBy( ceThis.uiSize );
 			}
 
@@ -132,11 +136,23 @@ namespace pw {
 					}
 				}
 			}
+			const uint32_t ui32FrameSize = uint32_t( m_uiNumChannels ) * m_uiBytesPerSample;
+
+			// Size the "data" chunk before anything else so that "smpl" loop points can be validated against it, whatever the chunk order.
+			//	A truncated file (for example a recording that was never closed) only uses the bytes that actually exist.
+			for ( size_t I = 0; I < ceChunks.size(); ++I ) {
+				if ( ceChunks[I].u.uiName == PW_C_DATA ) {
+					if ( !ui32FrameSize ) { return false; }		// No (valid) "fmt " chunk.
+					_sbStream.MovePointerTo( ceChunks[I].uiOffset );
+					if ( _sbStream.Remaining() < sizeof( PW_CHUNK_HEADER ) ) { return false; }
+					ceChunks[I].uiSize = static_cast<uint32_t>(std::min<uint64_t>( ceChunks[I].uiSize, _sbStream.Remaining() - sizeof( PW_CHUNK_HEADER ) ));
+					m_ui32OriginalSampleCount = ceChunks[I].uiSize / ui32FrameSize;
+				}
+			}
 			
 			for ( size_t I = 0; I < ceChunks.size(); ++I ) {
 				switch ( ceChunks[I].u.uiName ) {
 					case PW_C_DATA : {		// "data"
-						m_ui32OriginalSampleCount = ceChunks[I].uiSize / (m_uiNumChannels * m_uiBytesPerSample);
 						if ( !(_ui32LoadFlags & PW_LF_DATA) ) { break; }
 
 						
@@ -243,14 +259,14 @@ namespace pw {
 				PW_READ_32( ceThis.uiSize );
 
 				ceChunks.push_back( ceThis );
-				stOffset += ceThis.uiSize;
+				stOffset += ceThis.uiSize + (ceThis.uiSize & 1);	// Chunks are word-aligned; the pad byte is not part of the size.
 			}
 
 			// Do the format chunk first.
 			for ( size_t I = 0; I < ceChunks.size(); ++I ) {
 				switch ( ceChunks[I].u.uiName ) {
 					case PW_C_FMT_ : {		// "fmt "
-						const PW_FMT_CHUNK * pfcFmt = PW_PTR_SIZE( PW_FMT_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_FMT_CHUNK * pfcFmt = PW_PTR_SIZE( PW_FMT_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !pfcFmt ) { return false; }
 
 						if ( !LoadFmt( pfcFmt ) ) { return false; }
@@ -262,8 +278,9 @@ namespace pw {
 			for ( size_t I = 0; I < ceChunks.size(); ++I ) {
 				switch ( ceChunks[I].u.uiName ) {
 					case PW_C_DATA : {		// "data"
-						const PW_DATA_CHUNK * pfcData = PW_PTR_SIZE( PW_DATA_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_DATA_CHUNK * pfcData = PW_PTR_SIZE( PW_DATA_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !pfcData ) { return false; }
+						if ( !(m_uiNumChannels * m_uiBytesPerSample) ) { return false; }		// No (valid) "fmt " chunk.
 						m_ui32OriginalSampleCount = pfcData->chHeader.uiSize / (m_uiNumChannels * m_uiBytesPerSample);
 
 						if ( !(_ui32LoadFlags & PW_LF_DATA) ) { break; }
@@ -272,7 +289,7 @@ namespace pw {
 					}
 					case PW_C_SMPL : {		// "smpl"
 						if ( !(_ui32LoadFlags & PW_LF_SMPL) ) { break; }
-						const PW_SMPL_CHUNK * pfcSmpl = PW_PTR_SIZE( PW_SMPL_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_SMPL_CHUNK * pfcSmpl = PW_PTR_SIZE( PW_SMPL_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !pfcSmpl ) { return false; }
 
 						if ( !LoadSmpl( pfcSmpl ) ) { return false; }
@@ -280,7 +297,7 @@ namespace pw {
 					}
 					case PW_C_LIST : {		// "LIST"
 						if ( !(_ui32LoadFlags & PW_LF_LIST) ) { break; }
-						const PW_LIST_CHUNK * plcList = PW_PTR_SIZE( PW_LIST_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_LIST_CHUNK * plcList = PW_PTR_SIZE( PW_LIST_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !plcList ) { return false; }
 
 						if ( !LoadList( plcList ) ) { return false; }
@@ -288,7 +305,7 @@ namespace pw {
 					}
 					case PW_C_ID3_ : {		// "id3 "
 						if ( !(_ui32LoadFlags & PW_LF_ID3) ) { break; }
-						const PW_ID3_CHUNK * picList = PW_PTR_SIZE( PW_ID3_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_ID3_CHUNK * picList = PW_PTR_SIZE( PW_ID3_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !picList ) { return false; }
 
 						if ( !LoadId3( picList ) ) { return false; }
@@ -296,7 +313,7 @@ namespace pw {
 					}
 					case PW_C_INST : {		// "inst"
 						if ( !(_ui32LoadFlags & PW_LF_INST) ) { break; }
-						const PW_INST_CHUNK * picList = PW_PTR_SIZE( PW_INST_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize );
+						const PW_INST_CHUNK * picList = PW_PTR_SIZE( PW_INST_CHUNK, ceChunks[I].uiOffset, ceChunks[I].uiSize + sizeof( PW_CHUNK_HEADER ) );
 						if ( !picList ) { return false; }
 
 						if ( !LoadInst( picList ) ) { return false; }
@@ -498,6 +515,10 @@ namespace pw {
 						}
 						break;
 					}
+					case 32 : {
+						m_sStream.pfCvtAndWriteFunc = &CWavFile::BatchF32ToPcm32;
+						break;
+					}
 					case 24 : {
 						m_sStream.pfCvtAndWriteFunc = &CWavFile::BatchF32ToPcm24;
 #ifdef __AVX2__
@@ -589,20 +610,24 @@ namespace pw {
 				m_sStream.bAdding = true;
 				m_sStream.vCurBuffer.push_back( _fSample );
 				uint64_t ui64TotalWillWrite = ++m_sStream.ui64SamplesWritten;
-				m_sStream.ui32WavFile_DSize += sizeof( float );
 
 				if ( m_sStream.bMeta && m_sStream.pfMetaFunc ) {
 					std::unique_lock<std::mutex> ulLockMeta( m_sStream.mMetaMutex );
 					AddMetaData();
 				}
 
-				if PW_UNLIKELY( ui64TotalWillWrite == ((UINT_MAX - m_sStream.ui32WavFile_Size - 4) / sizeof( float )) ||		// Maximum a WAV file can contain (4294967264/0xFFFFFFE0 samples).
+				const bool bFileFull = ui64TotalWillWrite >= m_sStream.ui64MaxSamples;									// The RIFF size cannot grow past 32 bits.
+				if PW_UNLIKELY( bFileFull ||
 					m_sStream.vCurBuffer.size() == m_sStream.stBufferSize ) {													// Buffer limit reached.
 					// Efficiently pass the buffer off to the writer thread.
 					m_sStream.qBufferQueue.push( std::move( m_sStream.vCurBuffer ) );
 					// Create a new buffer and reserve space for efficiency.
 					m_sStream.vCurBuffer.clear();
 					m_sStream.vCurBuffer.reserve( m_sStream.stBufferSize );
+					if PW_UNLIKELY( bFileFull ) {
+						// No more samples fit in a WAV file.  End the stream; the writer thread finalizes and closes the file.
+						m_sStream.bEnd = true;
+					}
 					// Notify the writer thread that a full buffer is ready.
 					m_sStream.cvCondition.notify_one();
 				}
@@ -666,6 +691,10 @@ namespace pw {
 		m_uiBytesPerSample = 0;
 		m_uiBitsPerSample = 0;
 		m_uiBaseNote = 64;
+		m_fFormat = PW_F_PCM;
+		m_ieInstEntry = PW_INST_ENTRY();
+		m_bHasInst = false;
+		m_ui8Id3Version = 3;
 	}
 
 #pragma optimize( "gt", on )
@@ -914,11 +943,21 @@ namespace pw {
 	 * \return Returns true if everything loaded fine.
 	 */
 	bool CWavFile::LoadFmt( const PW_FMT_CHUNK * _pfcChunk ) {
+		if ( _pfcChunk->chHeader.uiSize < 16 ) { return false; }
+		uint16_t ui16Format = _pfcChunk->uiAudioFormat;
+		if ( ui16Format == PW_F_EXTENSIBLE ) {
+			// WAVE_FORMAT_EXTENSIBLE: cbSize >= 22 is followed by wValidBitsPerSample, dwChannelMask, and the SubFormat GUID, whose first 2 bytes
+			//	are the actual format tag (KSDATAFORMAT_SUBTYPE_PCM = 1, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = 3).
+			if ( _pfcChunk->chHeader.uiSize < 40 || _pfcChunk->uiExtraParamSize < 22 ) { return false; }
+			std::memcpy( &ui16Format, reinterpret_cast<const uint8_t *>(_pfcChunk) + sizeof( PW_CHUNK_HEADER ) + 24, sizeof( ui16Format ) );
+		}
+		// Sample sizes that are not whole bytes (ADPCM etc.) cannot be addressed by this class.
+		if ( !_pfcChunk->uiNumChannels || !_pfcChunk->uiBitsPerSample || (_pfcChunk->uiBitsPerSample & 7) ) { return false; }
 		m_uiNumChannels = _pfcChunk->uiNumChannels;
 		m_uiSampleRate = _pfcChunk->uiSampleRate;
 		m_uiBitsPerSample = _pfcChunk->uiBitsPerSample;
 		m_uiBytesPerSample = m_uiBitsPerSample / 8;
-		m_fFormat = static_cast<PW_FORMAT>(_pfcChunk->uiAudioFormat);
+		m_fFormat = static_cast<PW_FORMAT>(ui16Format);
 		return true;
 	}
 
@@ -929,9 +968,11 @@ namespace pw {
 	 * \return Returns true if everything loaded fine.
 	 */
 	bool CWavFile::LoadData( const PW_DATA_CHUNK * _pdcChunk, uint32_t _ui32StartSample, uint32_t _ui32EndSample ) {
-		_ui32EndSample = std::min<uint32_t>( _ui32EndSample, _pdcChunk->chHeader.uiSize / (m_uiNumChannels * m_uiBytesPerSample) );
+		const uint32_t ui32FrameSize = uint32_t( m_uiNumChannels ) * m_uiBytesPerSample;
+		if ( !ui32FrameSize ) { return false; }		// No (valid) "fmt " chunk.
+		_ui32EndSample = std::min<uint32_t>( _ui32EndSample, _pdcChunk->chHeader.uiSize / ui32FrameSize );
 		_ui32StartSample = std::min<uint32_t>( _ui32StartSample, _ui32EndSample );
-		size_t sTotalSamples = std::min<size_t>( _ui32EndSample - _ui32StartSample, _pdcChunk->chHeader.uiSize / (m_uiNumChannels * m_uiBytesPerSample) - _ui32StartSample ) * m_uiNumChannels;
+		size_t sTotalSamples = std::min<size_t>( _ui32EndSample - _ui32StartSample, _pdcChunk->chHeader.uiSize / ui32FrameSize - _ui32StartSample ) * m_uiNumChannels;
 
 		try {
 			m_vSamples.resize( sTotalSamples * m_uiBytesPerSample );
@@ -939,7 +980,9 @@ namespace pw {
 		catch ( ... ) { return false; }
 		if ( m_vSamples.size() != sTotalSamples * m_uiBytesPerSample ) { return false; }
 		
-		std::memcpy( m_vSamples.data(), _pdcChunk->ui8Data + (_ui32StartSample * (m_uiNumChannels * m_uiBytesPerSample)), m_vSamples.size() );
+		if ( m_vSamples.size() ) {
+			std::memcpy( m_vSamples.data(), _pdcChunk->ui8Data + (size_t( _ui32StartSample ) * ui32FrameSize), m_vSamples.size() );
+		}
 		return true;
 	}
 
@@ -950,10 +993,17 @@ namespace pw {
 	 * \return Returns true if everything loaded fine.
 	 */
 	bool CWavFile::LoadSmpl( const PW_SMPL_CHUNK * _pscChunk ) {
+		constexpr uint32_t ui32HeaderSize = sizeof( PW_SMPL_CHUNK ) - sizeof( PW_CHUNK_HEADER ) - sizeof( PW_LOOP_POINT );	// 36.
+		if ( _pscChunk->chHeader.uiSize < ui32HeaderSize ) { return true; }	// Malformed; ignore it rather than failing the whole file.
 		m_uiBaseNote = _pscChunk->uiMIDIUnityNote;
-		for ( size_t I = 0; I < _pscChunk->uiNumSampleLoops; ++I ) {
-			if ( _pscChunk->lpLoops[I].uiStart < m_vSamples.size() && _pscChunk->lpLoops[I].uiEnd < m_vSamples.size() ) {
-				m_vLoops.push_back( _pscChunk->lpLoops[I] );
+		// Never read more loops than the chunk actually holds.
+		const size_t stLoops = std::min<size_t>( _pscChunk->uiNumSampleLoops, (_pscChunk->chHeader.uiSize - ui32HeaderSize) / sizeof( PW_LOOP_POINT ) );
+		for ( size_t I = 0; I < stLoops; ++I ) {
+			PW_LOOP_POINT lpLoop;
+			std::memcpy( &lpLoop, reinterpret_cast<const uint8_t *>(_pscChunk->lpLoops) + I * sizeof( PW_LOOP_POINT ), sizeof( lpLoop ) );
+			// Loop points are sample frames, not bytes.
+			if ( lpLoop.uiStart <= lpLoop.uiEnd && (!m_ui32OriginalSampleCount || lpLoop.uiEnd < m_ui32OriginalSampleCount) ) {
+				m_vLoops.push_back( lpLoop );
 			}
 		}
 		return true;
@@ -966,31 +1016,30 @@ namespace pw {
 	 * \return Returns true if everything loaded fine.
 	 */
 	bool CWavFile::LoadList( const PW_LIST_CHUNK * _plcChunk ) {
+		if ( _plcChunk->chHeader.uiSize < sizeof( _plcChunk->u ) ) { return true; }
 		const uint8_t * pui8Data = _plcChunk->ui8Data;
-		const uint8_t * pui8End = pui8Data + _plcChunk->chHeader.uiSize - sizeof( _plcChunk->u );
+		const uint8_t * pui8End = pui8Data + (_plcChunk->chHeader.uiSize - sizeof( _plcChunk->u ));
 		switch ( _plcChunk->u.uiTypeId ) {
 			case PW_C_INFO : {				// INFO
-				while ( pui8Data < pui8End ) {
+				while ( pui8End - pui8Data >= 8 ) {
 					PW_LIST_ENTRY lsThis;
-					if ( (pui8Data + sizeof( uint32_t )) > pui8End ) { return false; }
-					lsThis.u.uiIfoId = (*reinterpret_cast<const uint32_t *>(pui8Data));
+					std::memcpy( &lsThis.u.uiIfoId, pui8Data, sizeof( uint32_t ) );
 					pui8Data += sizeof( uint32_t );
-					if ( (pui8Data + sizeof( uint32_t )) > pui8End ) { return false; }
-					uint32_t ui32Size = (*reinterpret_cast<const uint32_t *>(pui8Data));
+					uint32_t ui32Size;
+					std::memcpy( &ui32Size, pui8Data, sizeof( uint32_t ) );
 					pui8Data += sizeof( uint32_t );
-					for ( uint32_t I = 0; I < ui32Size; ++I ) {
-						if ( (pui8Data + sizeof( uint8_t )) > pui8End ) { return false; }
-						lsThis.sText.push_back( (*pui8Data++) );
-					}
+					if ( ui32Size > size_t( pui8End - pui8Data ) ) { break; }	// Malformed; keep what was read.
+					lsThis.sText.assign( reinterpret_cast<const char8_t *>(pui8Data), ui32Size );
+					pui8Data += ui32Size;
+					// Sub-chunks are word-aligned: skip the pad byte after an odd-sized entry.
+					if ( (ui32Size & 1) && pui8Data < pui8End ) { ++pui8Data; }
 					m_vListEntries.push_back( lsThis );
 				}
 				break;
 			}
-			case PW_C_ADTL : {
-				break;
-			}
 			default : {
-				return false;
+				// "adtl" and other list types are not used by this class; ignore them rather than failing the whole file.
+				break;
 			}
 		}
 		
@@ -1005,28 +1054,49 @@ namespace pw {
 	 * \return Returns true if everything loaded fine.
 	 */
 	bool CWavFile::LoadId3( const PW_ID3_CHUNK * _picChunk ) {
-		if ( _picChunk->ui16Version == 0x3 ) {
-			uint32_t ui32Len = DecodeSize(_picChunk->ui32Size );
+		// Anything this loader cannot represent faithfully is ignored rather than failing the whole file.
+		constexpr uint32_t ui32TagHeader = 10;
+		const uint32_t ui32ChunkSize = _picChunk->chHeader.uiSize;
+		if ( ui32ChunkSize < ui32TagHeader ) { return true; }
+		if ( _picChunk->sName[0] != u8'I' || _picChunk->sName[1] != u8'D' || _picChunk->sName[2] != u8'3' ) { return true; }
+		const uint8_t ui8Major = static_cast<uint8_t>(_picChunk->ui16Version & 0xFF);
+		if ( ui8Major != 3 && ui8Major != 4 ) { return true; }
+		if ( _picChunk->ui8Flags & 0x80 ) { return true; }				// Unsynchronisation is not supported.
+		const uint32_t ui32Len = std::min<uint32_t>( DecodeSize( _picChunk->ui32Size ), ui32ChunkSize - ui32TagHeader );
+		const uint8_t * pui8Data = _picChunk->ui8Data;
+		auto ReadBe32 = [&]( uint32_t _ui32Offset ) {
+			return (uint32_t( pui8Data[_ui32Offset] ) << 24) | (uint32_t( pui8Data[_ui32Offset+1] ) << 16) | (uint32_t( pui8Data[_ui32Offset+2] ) << 8) | uint32_t( pui8Data[_ui32Offset+3] );
+		};
+		auto ReadRaw32 = [&]( uint32_t _ui32Offset ) {
+			uint32_t ui32Val;
+			std::memcpy( &ui32Val, &pui8Data[_ui32Offset], sizeof( ui32Val ) );
+			return ui32Val;
+		};
 
-			for ( uint32_t ui32Offset = 0; ui32Offset < ui32Len; ) {
-				uint32_t ui32Id = (*reinterpret_cast<const uint32_t *>(&_picChunk->ui8Data[ui32Offset]));
-				ui32Offset += sizeof( uint32_t );
-				uint32_t ui32Size = DecodeSize( (*reinterpret_cast<const uint32_t *>(&_picChunk->ui8Data[ui32Offset])) );
-				ui32Offset += sizeof( uint32_t );
-				uint16_t ui16Flags = (*reinterpret_cast<const uint16_t *>(&_picChunk->ui8Data[ui32Offset]));
-				ui32Offset += sizeof( uint16_t );
-				PW_ID3_ENTRY ieEntry;
-				ieEntry.u.uiIfoId = ui32Id;
-				ieEntry.ui16Flags = ui16Flags;
-				for ( uint32_t J = 0; J < ui32Size; ++J ) {
-					ieEntry.sValue.push_back( _picChunk->ui8Data[ui32Offset++] );
-				}
-				m_vId3Entries.push_back( ieEntry );
-			}
-			return true;
+		uint32_t ui32Offset = 0;
+		if ( _picChunk->ui8Flags & 0x40 ) {
+			// Extended header.  v2.3: the size excludes its own 4 bytes.  v2.4: the size is sync-safe and includes itself.
+			if ( ui32Len < 4 ) { return true; }
+			ui32Offset = (ui8Major == 4) ? DecodeSize( ReadRaw32( 0 ) ) : (ReadBe32( 0 ) + 4);
 		}
 
-		return false;
+		std::vector<PW_ID3_ENTRY> vEntries;
+		while ( ui32Offset <= ui32Len && ui32Len - ui32Offset >= ui32TagHeader ) {
+			if ( pui8Data[ui32Offset] == 0 ) { break; }						// Padding.
+			PW_ID3_ENTRY ieEntry;
+			std::memcpy( &ieEntry.u.uiIfoId, &pui8Data[ui32Offset], sizeof( uint32_t ) );
+			// Frame sizes are plain big-endian in v2.3 and sync-safe in v2.4.
+			const uint32_t ui32Size = (ui8Major == 4) ? DecodeSize( ReadRaw32( ui32Offset + 4 ) ) : ReadBe32( ui32Offset + 4 );
+			std::memcpy( &ieEntry.ui16Flags, &pui8Data[ui32Offset+8], sizeof( uint16_t ) );
+			ui32Offset += ui32TagHeader;
+			if ( ui32Size > ui32Len - ui32Offset ) { break; }
+			ieEntry.sValue.assign( reinterpret_cast<const char8_t *>(&pui8Data[ui32Offset]), ui32Size );
+			ui32Offset += ui32Size;
+			vEntries.push_back( ieEntry );
+		}
+		m_vId3Entries.insert( m_vId3Entries.end(), vEntries.begin(), vEntries.end() );
+		m_ui8Id3Version = ui8Major;
+		return true;
 	}
 
 	/**
@@ -1046,6 +1116,7 @@ namespace pw {
 		PW_COPY( ui8HiVel );
 
 #undef PW_COPY
+		m_bHasInst = true;
 		return true;
 	}
 
@@ -1089,7 +1160,12 @@ namespace pw {
 		fcChunk.chHeader.uiSize = 16;
 		fcChunk.uiAudioFormat = _psdSaveSettings ? _psdSaveSettings->fFormat : _fFormat;
 		fcChunk.uiBitsPerSample = (_psdSaveSettings && _psdSaveSettings->uiBitsPerSample) ? _psdSaveSettings->uiBitsPerSample : BitsPerSample();
-		if ( PW_F_IEEE_FLOAT == fcChunk.uiAudioFormat ) { fcChunk.uiBitsPerSample = 32; }
+		if ( PW_F_IEEE_FLOAT == fcChunk.uiAudioFormat ) {
+			if ( fcChunk.uiBitsPerSample != 64 ) { fcChunk.uiBitsPerSample = 32; }
+			// Every non-PCM "fmt " chunk carries cbSize (0 here), making it 18 bytes.
+			fcChunk.chHeader.uiSize = 18;
+			fcChunk.uiExtraParamSize = 0;
+		}
 		fcChunk.uiNumChannels = _uiChannels;
 		fcChunk.uiSampleRate = (_psdSaveSettings && _psdSaveSettings->uiHz) ? _psdSaveSettings->uiHz : Hz();
 		fcChunk.uiBlockAlign = fcChunk.uiBitsPerSample * fcChunk.uiNumChannels / 8;
@@ -1111,7 +1187,7 @@ namespace pw {
 		PW_PUSH32( uiVal );				// 36 + (Num Sample Loops * 24) + Sampler Data
 		PW_PUSH32( 0 );					// Manufacturer.
 		PW_PUSH32( 0 );					// Product.
-		PW_PUSH32( 0 );					// Sample Period.
+		PW_PUSH32( m_uiSampleRate ? static_cast<uint32_t>(std::round( 1.0e9 / m_uiSampleRate )) : 0 );	// Sample Period (nanoseconds).
 		PW_PUSH32( m_uiBaseNote );		// MIDI Unity Note.
 		PW_PUSH32( 0 );					// MIDI Pitch Fraction.
 		PW_PUSH32( 0 );					// SMPTE Format.
@@ -1144,21 +1220,117 @@ namespace pw {
 	 */
 	std::vector<uint8_t> CWavFile::CreateList() const {
 		std::vector<uint8_t> vRet;
+		if ( !m_vListEntries.size() ) { return vRet; }
 #define PW_PUSH32( VAL )		vRet.push_back( static_cast<uint8_t>((VAL) >> 0) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 8) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 16) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 24) )
 		PW_PUSH32( PW_C_LIST );			// "LIST"
 		uint32_t ui32Size = 4;
 		for ( auto I = m_vListEntries.size(); I--; ) {
-			ui32Size += static_cast<uint32_t>(m_vListEntries[I].sText.size()) + 8;
+			const uint32_t ui32Text = static_cast<uint32_t>(m_vListEntries[I].sText.size());
+			ui32Size += 8 + ui32Text + (ui32Text & 1);	// Sub-chunks are word-aligned.
 		}
 		PW_PUSH32( ui32Size );				// Size.
 		PW_PUSH32( PW_C_INFO );			// "INFO"
 		for ( size_t I = 0; I < m_vListEntries.size(); ++I ) {
+			const uint32_t ui32Text = static_cast<uint32_t>(m_vListEntries[I].sText.size());
 			PW_PUSH32( m_vListEntries[I].u.uiIfoId );
-			PW_PUSH32( static_cast<uint32_t>(m_vListEntries[I].sText.size()) );
+			PW_PUSH32( ui32Text );
 			for ( size_t J = 0; J < m_vListEntries[I].sText.size(); ++J ) {
 				vRet.push_back( static_cast<uint8_t>(m_vListEntries[I].sText[J]) );
 			}
+			if ( ui32Text & 1 ) { vRet.push_back( 0 ); }
 		}
+#undef PW_PUSH32
+		return vRet;
+	}
+
+	/**
+	 * Writes a file-image "inst" chunk to a vector, if an "inst" chunk was loaded.
+	 *
+	 * \return Returns the bytes that represent the "inst" chunk in a file, or an empty vector.
+	 */
+	std::vector<uint8_t> CWavFile::CreateInst() const {
+		std::vector<uint8_t> vRet;
+		if ( !m_bHasInst ) { return vRet; }
+#define PW_PUSH32( VAL )		vRet.push_back( static_cast<uint8_t>((VAL) >> 0) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 8) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 16) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 24) )
+		PW_PUSH32( PW_C_INST );			// "inst"
+		PW_PUSH32( 7 );
+		vRet.push_back( m_ieInstEntry.ui8UnshiftedNote );
+		vRet.push_back( m_ieInstEntry.ui8FineTune );
+		vRet.push_back( m_ieInstEntry.ui8Gain );
+		vRet.push_back( m_ieInstEntry.ui8LowNote );
+		vRet.push_back( m_ieInstEntry.ui8HiNote );
+		vRet.push_back( m_ieInstEntry.ui8LowVel );
+		vRet.push_back( m_ieInstEntry.ui8HiVel );
+		vRet.push_back( 0 );				// Pad byte.
+#undef PW_PUSH32
+		return vRet;
+	}
+
+	/**
+	 * Writes file-image "DISP" chunks to a vector, one per image added with AddImage().
+	 *
+	 * \return Returns the bytes that represent the "DISP" chunks in a file, or an empty vector.
+	 */
+	std::vector<uint8_t> CWavFile::CreateDisp() const {
+		std::vector<uint8_t> vRet;
+#define PW_PUSH32( VAL )		vRet.push_back( static_cast<uint8_t>((VAL) >> 0) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 8) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 16) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 24) )
+		for ( size_t I = 0; I < m_vDisp.size(); ++I ) {
+			const uint32_t ui32Size = static_cast<uint32_t>(m_vDisp[I].vValue.size()) + 4;
+			PW_PUSH32( PW_C_DISP );			// "DISP"
+			PW_PUSH32( ui32Size );
+			PW_PUSH32( m_vDisp[I].ui32Type );
+			vRet.insert( vRet.end(), m_vDisp[I].vValue.begin(), m_vDisp[I].vValue.end() );
+			if ( ui32Size & 1 ) { vRet.push_back( 0 ); }
+		}
+#undef PW_PUSH32
+		return vRet;
+	}
+
+	/**
+	 * Writes a file-image "id3 " chunk to a vector containing the loaded ID3v2 frames, using the loaded tag's version.
+	 *
+	 * \return Returns the bytes that represent the "id3 " chunk in a file, or an empty vector.
+	 */
+	std::vector<uint8_t> CWavFile::CreateId3() const {
+		std::vector<uint8_t> vRet;
+		if ( !m_vId3Entries.size() ) { return vRet; }
+		auto PushSyncSafe = []( std::vector<uint8_t> &_vDst, uint32_t _ui32Val ) {
+			_vDst.push_back( static_cast<uint8_t>((_ui32Val >> 21) & 0x7F) );
+			_vDst.push_back( static_cast<uint8_t>((_ui32Val >> 14) & 0x7F) );
+			_vDst.push_back( static_cast<uint8_t>((_ui32Val >> 7) & 0x7F) );
+			_vDst.push_back( static_cast<uint8_t>(_ui32Val & 0x7F) );
+		};
+		std::vector<uint8_t> vFrames;
+		for ( size_t I = 0; I < m_vId3Entries.size(); ++I ) {
+			const uint32_t ui32Size = static_cast<uint32_t>(m_vId3Entries[I].sValue.size());
+			if ( ui32Size >= (1U << 28) ) { return std::vector<uint8_t>(); }
+			vFrames.insert( vFrames.end(), m_vId3Entries[I].u.cName, m_vId3Entries[I].u.cName + 4 );
+			if ( m_ui8Id3Version == 4 ) { PushSyncSafe( vFrames, ui32Size ); }
+			else {
+				vFrames.push_back( static_cast<uint8_t>(ui32Size >> 24) );
+				vFrames.push_back( static_cast<uint8_t>(ui32Size >> 16) );
+				vFrames.push_back( static_cast<uint8_t>(ui32Size >> 8) );
+				vFrames.push_back( static_cast<uint8_t>(ui32Size) );
+			}
+			vFrames.push_back( static_cast<uint8_t>(m_vId3Entries[I].ui16Flags) );
+			vFrames.push_back( static_cast<uint8_t>(m_vId3Entries[I].ui16Flags >> 8) );
+			vFrames.insert( vFrames.end(), m_vId3Entries[I].sValue.begin(), m_vId3Entries[I].sValue.end() );
+		}
+		if ( vFrames.size() >= (1U << 28) ) { return std::vector<uint8_t>(); }
+
+#define PW_PUSH32( VAL )		vRet.push_back( static_cast<uint8_t>((VAL) >> 0) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 8) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 16) ); vRet.push_back( static_cast<uint8_t>((VAL) >> 24) )
+		const uint32_t ui32TagSize = static_cast<uint32_t>(vFrames.size()) + 10;
+		PW_PUSH32( PW_C_ID3_ );			// "id3 "
+		PW_PUSH32( ui32TagSize );
+		vRet.push_back( 'I' );
+		vRet.push_back( 'D' );
+		vRet.push_back( '3' );
+		vRet.push_back( m_ui8Id3Version );
+		vRet.push_back( 0 );				// Revision.
+		vRet.push_back( 0 );				// Flags.
+		PushSyncSafe( vRet, static_cast<uint32_t>(vFrames.size()) );
+		vRet.insert( vRet.end(), vFrames.begin(), vFrames.end() );
+		if ( ui32TagSize & 1 ) { vRet.push_back( 0 ); }
 #undef PW_PUSH32
 		return vRet;
 	}
@@ -1214,37 +1386,41 @@ namespace pw {
 
 		PW_FMT_CHUNK fcChunk = CreateFmt( m_sStream.fFormat, m_sStream.ui16Channels,
 			&sdSaveSettings );
+		if ( !fcChunk.uiBlockAlign ) { return false; }
 
-		uint32_t uiFmtSize = fcChunk.chHeader.uiSize + 8;
-
-		uint32_t ui32Samples = 0;//uint32_t( std::min<uint64_t>( UINT_MAX, ui64Samples ));
-		uint32_t ui32DataSize = CalcSize( m_sStream.fFormat, ui32Samples, m_sStream.ui16Channels, fcChunk.uiBitsPerSample );
-
-		uint32_t ui32Size = 4 +							// "WAVE".
-			uiFmtSize +									// "fmt " chunk.
-			ui32DataSize + 8 +							// "data" chunk.
-			0;
+		const uint32_t uiFmtSize = fcChunk.chHeader.uiSize + 8;
 
 		if ( !m_sStream.sfFile.WriteUi32( PW_C_RIFF ) ) { return false; }
 
 		m_sStream.ui64WavFileOffset_Size = m_sStream.sfFile.GetPos();
-		if ( !m_sStream.sfFile.Write( ui32Size ) ) { return false; }
+		if ( !m_sStream.sfFile.Write( uint32_t( 0 ) ) ) { return false; }		// Filled in when the stream is closed.
 		
 		if ( !m_sStream.sfFile.WriteUi32( PW_C_WAVE ) ) { return false; }
 
 		if ( !m_sStream.sfFile.WriteToFile( reinterpret_cast<const uint8_t *>(&fcChunk), uiFmtSize ) ) { return false; }
+
+		// Everything in the RIFF chunk except the sample data and its pad byte.
+		m_sStream.ui32WavFile_Size = 4 + uiFmtSize + 8;							// "WAVE", "fmt ", and the "data" chunk header.
+		m_sStream.ui64WavFileOffset_Fact = 0;
+		if ( fcChunk.uiAudioFormat != PW_F_PCM ) {
+			// Every non-PCM format requires a "fact" chunk holding the number of sample frames.
+			if ( !m_sStream.sfFile.WriteUi32( PW_C_FACT ) ) { return false; }
+			if ( !m_sStream.sfFile.Write( uint32_t( 4 ) ) ) { return false; }
+			m_sStream.ui64WavFileOffset_Fact = m_sStream.sfFile.GetPos();
+			if ( !m_sStream.sfFile.Write( uint32_t( 0 ) ) ) { return false; }		// Filled in when the stream is closed.
+			m_sStream.ui32WavFile_Size += 12;
+		}
+
 		// Append the "data" chunk.
 		if ( !m_sStream.sfFile.WriteUi32( PW_C_DATA ) ) { return false; }
 		
 		m_sStream.ui64WavFileOffset_DSize = m_sStream.sfFile.GetPos();
-		if ( !m_sStream.sfFile.Write( ui32DataSize ) ) { return false; }
+		if ( !m_sStream.sfFile.Write( uint32_t( 0 ) ) ) { return false; }		// Filled in when the stream is closed.
 		
-		// File now ready for streaming.
-		
-		m_sStream.ui32WavFile_Size = 4 + uiFmtSize;
-		m_sStream.ui32WavFile_DSize = 0;
+		// The RIFF size (ui32WavFile_Size + data + pad byte) must fit in 32 bits.
+		m_sStream.ui64MaxSamples = (0xFFFFFFFFULL - m_sStream.ui32WavFile_Size - 1) / fcChunk.uiBlockAlign * m_sStream.ui16Channels;
 
-		//m_sStream.ui64FinalSampleCount = ui64Samples;
+		// File now ready for streaming.
 		return true;
 	}
 
@@ -1254,21 +1430,26 @@ namespace pw {
 	void CWavFile::CloseStreamFile() {
 		if PW_LIKELY( m_sStream.sfFile.IsOpen() ) {
 			if PW_LIKELY( m_sStream.bStreaming ) {
-				uint32_t ui32Size = uint32_t( m_sStream.ui32WavFile_DSize * uint64_t( m_sStream.ui16Bits ) / (sizeof( float ) * 8) );
-				if ( ui32Size & 1 ) {
-					m_sStream.sfFile.Write<uint8_t>( 0 );
-					++ui32Size;
+				// AddStreamSample() never accepts more samples than fit (ui64MaxSamples), so these sizes cannot overflow.
+				const uint32_t ui32DataSize = static_cast<uint32_t>(m_sStream.ui64SamplesWritten * (m_sStream.ui16Bits / 8));
+				const uint32_t ui32Pad = ui32DataSize & 1;
+				if ( ui32Pad ) {
+					m_sStream.sfFile.Write<uint8_t>( 0 );			// Pad byte; not part of the "data" size.
 				}
 
 				m_sStream.sfFile.MovePointerTo( m_sStream.ui64WavFileOffset_Size );
-				m_sStream.sfFile.Write( m_sStream.ui32WavFile_Size + ui32Size );
+				m_sStream.sfFile.Write( uint32_t( m_sStream.ui32WavFile_Size + ui32DataSize + ui32Pad ) );
 
 				m_sStream.sfFile.MovePointerTo( m_sStream.ui64WavFileOffset_DSize );
-				m_sStream.sfFile.Write( ui32Size );
+				m_sStream.sfFile.Write( ui32DataSize );
+
+				if ( m_sStream.ui64WavFileOffset_Fact ) {
+					m_sStream.sfFile.MovePointerTo( m_sStream.ui64WavFileOffset_Fact );
+					m_sStream.sfFile.Write( static_cast<uint32_t>(m_sStream.ui64SamplesWritten / m_sStream.ui16Channels) );
+				}
 			}
 		
 			m_sStream.sfFile.Close();
-			m_sStream.ui32WavFile_DSize = 0;
 		}
 		
 

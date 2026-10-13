@@ -243,6 +243,7 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
         }
 
 
+        bool bModsOk = true;
         for ( std::vector<pw::PW_MODIFIER>::size_type J = 0; J < oOptions.vFuncs.size(); ++J ) {
             oOptions.vFuncs[J].stIdx = I;
             oOptions.vFuncs[J].stTotal = oOptions.vInputs.size();
@@ -251,9 +252,11 @@ int wmain( int _iArgC, wchar_t const * _wcpArgV[] ) {
                 std::wcout << std::format( L"Operation {} failed on file: \"{}\"",
                     oOptions.vFuncs[J].pcOperation,
                     reinterpret_cast<const wchar_t *>(oOptions.vOutputs[I].c_str()) ) << std::endl;
-                continue;  
+                bModsOk = false;
+                break;
             }
         }
+        if ( !bModsOk ) { continue; }   // Do not write an output file whose operations failed.
 
 
         if ( !wfWav.SaveAsPcm( oOptions.vOutputs[I].c_str(), aSamples ) ) {
